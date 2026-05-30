@@ -506,8 +506,11 @@ class EltakoFWWKW71L extends IPSModule
         $db1 = (int) ($data['DataByte1'] ?? -1);
         $db0 = (int) ($data['DataByte0'] ?? -1);
         $db3 = (int) ($data['DataByte3'] ?? -1);
+        // Actor confirmations: hi-res uses DataByte0 = 0x0E, percent uses 0x09/0x08.
+        // Our own send echo uses 0x0F (hi-res) — must NOT be mistaken for percent,
+        // hence the exact 0x09/0x08 match (not just "bit 3 set", which 0x0F also has).
         $isHires = ($db1 === self::DB1_WW || $db1 === self::DB1_KW) && $db0 === 0x0E;
-        $isPercent = $db3 === self::DB3_DIM && ($db0 & 0x08) === 0x08;
+        $isPercent = $db3 === self::DB3_DIM && ($db0 === self::DB0_ON || $db0 === self::DB0_OFF);
         if (!$isHires && !$isPercent) {
             return false;
         }

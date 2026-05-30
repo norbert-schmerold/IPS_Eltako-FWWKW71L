@@ -7,10 +7,12 @@ Das native Symcon-Modul ist defekt: es wertet die Bestätigungs-Telegramme des
 Aktors nicht aus (unabhängig von der eingetragenen ReturnID). Dieses Modul baut
 den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
 
-> **Status: Phase 1 (Hardware-Treiber, minimal).** Sende-/Empfangs-Logik
-> funktioniert, einige Telegramm-Details sind im Code mit `VERIFY@SETUP`
-> markiert und müssen am echten Setup per Debug-Mitschnitt bestätigt werden,
-> bevor man sich auf sie verlässt.
+> **Status: Phase 1 (Hardware-Treiber, minimal).** Gateway-Anbindung
+> (Parent-GUID, Sende-/Empfangs-Feldnamen) ist gegen die nativen
+> EnOcean-Module verifiziert. Verbleibende, **FWWKW-spezifische**
+> Telegramm-Details (DB3/DB0-Datenbytes, Teach-In-LRN-Layout, PWM↔DataByte2)
+> sind im Code mit `VERIFY@SETUP` markiert und müssen am echten Setup per
+> Debug-Mitschnitt bestätigt werden, bevor man sich auf sie verlässt.
 
 ## Architektur
 
@@ -25,9 +27,12 @@ den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
 
 | GUID | Bedeutung |
 | --- | --- |
-| `{A52FEFE9-7858-4B8E-A96E-26E15CB944F7}` | ParentRequirement (EnOcean-Gateway) |
-| `{DE2DA2C0-7A28-4D23-A9AA-6D1C7609C7EC}` | DataID Gateway → Device (Empfang) |
-| `{70E3075F-A35D-4DEB-AC20-C929A156FE48}` | DataID Device → Gateway (Senden) |
+| `{70E3075F-A35D-4DEB-AC20-C929A156FE48}` | ParentRequirement (EnOcean-Gateway) **und** DataID Device → Gateway (Senden) |
+| `{DE2DA2C0-7A28-4D23-A9AA-6D1C7609C7EC}` | Implemented-Interface, DataID Gateway → Device (Empfang) |
+
+Die GUIDs und die Telegramm-Feldnamen (`Device`, `DeviceID`, `DestinationID`,
+`DataLength`, `DataByte3..0`) wurden gegen die nativen EnOcean-Gerätemodule
+verifiziert (Referenz: [nefiertsrebliS/MoreEnoceanFeatures](https://github.com/nefiertsrebliS/MoreEnoceanFeatures)).
 
 ## Installation
 
@@ -53,14 +58,19 @@ den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
 
 ## Verifikation der Telegramm-Felder (`VERIFY@SETUP`)
 
-Vor dem produktiven Einsatz die Annahmen über das Gateway-JSON bestätigen:
+Die **Feldnamen** des Gateway-JSON (`Device`, `DeviceID`, `DataByteN`) sind
+gegen die nativen EnOcean-Module verifiziert. Offen bleiben die
+**FWWKW-spezifischen Byte-Werte** — vor dem produktiven Einsatz bestätigen:
 
 1. Property **„Debug: ALLE eingehenden Telegramme ausgeben"** aktivieren.
 2. Debug-Fenster der Instanz öffnen (`SendDebug`-Ausgaben).
 3. Am Aktor eine Statusänderung auslösen und das gedumpte RX-JSON prüfen:
-   - Heißt das Absenderfeld wirklich `SenderID`?
-   - Stimmen `Device`, `DataByte3`, `DataByte2`, `DataByte0`?
-4. Beim Senden den Mitschnitt am Gateway gegen das gesendete JSON prüfen.
+   - Welcher `DataByte3`-Wert kennzeichnet das Daten-/Rückmelde-Telegramm?
+     (Konstante `DB3_DATA`, aktuell `0x02`.)
+   - Steckt der PWM-Wert in `DataByte2`, der An/Aus-Flag in `DataByte0`?
+   - Welche Aktor-`DeviceID` meldet sich (→ ReturnID)?
+4. Beim Senden den Mitschnitt am Gateway gegen das gesendete JSON prüfen
+   (Teach-In-LRN-Bytes `DB3..0`).
 
 Stimmen die Feldnamen nicht, in [`module.php`](EltakoFWWKW71L/module.php) an den
 `VERIFY@SETUP`-Stellen anpassen.

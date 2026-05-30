@@ -15,9 +15,13 @@ declare(strict_types=1);
  */
 class EltakoFWWKW71L extends IPSModule
 {
-    /** EnOcean gateway data interface this module connects to. */
-    private const PARENT_GUID = '{A52FEFE9-7858-4B8E-A96E-26E15CB944F7}';
-    /** DataID for Device -> Gateway (send). */
+    /**
+     * EnOcean gateway data interface this module connects to (ConnectParent).
+     * Same GUID is used as the payload DataID when sending to the gateway.
+     * Verified against the native EnOcean device modules (see TX_DATAID).
+     */
+    private const PARENT_GUID = '{70E3075F-A35D-4DEB-AC20-C929A156FE48}';
+    /** DataID for Device -> Gateway (send); identical to the parent interface GUID. */
     private const TX_DATAID = '{70E3075F-A35D-4DEB-AC20-C929A156FE48}';
 
     /** RORG 4BS (0xA5). */
@@ -90,7 +94,8 @@ class EltakoFWWKW71L extends IPSModule
         if ($this->ReadPropertyBoolean('DebugPromiscuous')) {
             $this->SetReceiveDataFilter('.*');
         } else {
-            // VERIFY@SETUP: field name/order of "Device" in the gateway's RX JSON.
+            // "Device" = RORG; 165 (0xA5) = 4BS. Field name verified against the
+            // native EnOcean device modules. Pass all 4BS, match sender in ReceiveData.
             $this->SetReceiveDataFilter('.*"Device":' . self::RORG_4BS . '.*');
         }
 
@@ -282,23 +287,31 @@ class EltakoFWWKW71L extends IPSModule
             return '';
         }
 
-        // VERIFY@SETUP: every field name below ('Device', 'DataByte3', 'SenderID',
-        // 'DataByte2', 'DataByte0') is an assumption — confirm via promiscuous dump.
+        // Gateway RX JSON field names ('Device', 'DeviceID', 'DataByteN') verified
+        // against the native EnOcean device modules. The sender address arrives in
+        // 'DeviceID' (same field the gateway uses for the send offset).
         if ((int) ($data['Device'] ?? -1) !== self::RORG_4BS) {
             return '';
         }
+        if (!isset($data['DeviceID'])) {
+            return '';
+        }
+
+        $sender = (int) $data['DeviceID'];
+
+        // Discovery sees every 4BS telegram regardless of payload shape, so the
+        // actor's ID and telegram format can be inspected before they are known.
+        $this->maybeRecordDiscovery($sender, $data);
+
+        // VERIFY@SETUP: DB3 of the actor's data/feedback telegram for the free
+        // profile 07-3F-7F. This is device-specific — confirm via a live sniff
+        // (use Discovery / promiscuous debug) before relying on it.
         if ((int) ($data['DataByte3'] ?? -1) !== self::DB3_DATA) {
             return '';
         }
-        if (!isset($data['SenderID'])) {
-            return '';
-        }
 
-        $sender = (int) $data['SenderID'];
         $pct = $this->clamp((int) ($data['DataByte2'] ?? 0));
         $db0 = (int) ($data['DataByte0'] ?? 0);
-
-        $this->maybeRecordDiscovery($sender, $data);
 
         $idWW = $this->returnId('WW');
         $idKW = $this->returnId('KW');
@@ -367,7 +380,9 @@ class EltakoFWWKW71L extends IPSModule
      */
     private function sendTelegram(int $offset, int $db3, int $db2, int $db1, int $db0): void
     {
-        // VERIFY@SETUP: full send-JSON field set / names against EltakoShutter BaseData.
+        // Send-JSON field set verified against the native EnOcean device modules:
+        // DataID = parent interface GUID, Device = RORG, DeviceID = BaseID offset,
+        // DestinationID = -1 (broadcast), DataLength = 4 (4BS), DataByte3..0.
         $payload = [
             'DataID'        => self::TX_DATAID,
             'Device'        => self::RORG_4BS,

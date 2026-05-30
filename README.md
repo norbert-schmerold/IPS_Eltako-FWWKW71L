@@ -101,14 +101,20 @@ EFW_StopDiscovery($InstanceID);
 EFW_AdoptDiscovered($InstanceID, $hexId);  // -> Melde-ID
 ```
 
-Variablen (alle bedienbar):
-- **Status** (An/Aus) – schaltet beim Einschalten auf die **zuletzt** bekannte
-  Helligkeit je Kanal zurück (nicht stur 100 %).
-- **Helligkeit** + **Farbtemperatur** (CCT-Komfort) – setzen WW/KW über ein
-  additives Mischmodell: `Helligkeit = max(WW,KW)`, Farbtemperatur `0 = warm`
-  (nur WW) … `100 = kalt` (nur KW). Verlustfreier Round-Trip mit WW/KW.
+Variablen (alle bedienbar) – passend zur nativen **„Licht"-Kachel** von Symcon:
+- **Status** (`~Switch`, An/Aus) – schaltet beim Einschalten auf die **zuletzt**
+  bekannte Helligkeit je Kanal zurück (nicht stur 100 %).
+- **Helligkeit** (`~Intensity.100`) + **Farbtemperatur** (`~TWColor`, **Kelvin**
+  2700 = warm … 6500 = kalt) – CCT-Komfort, setzen WW/KW über ein additives
+  Mischmodell: `Helligkeit = max(WW,KW)`. Verlustfreier Round-Trip mit WW/KW.
 - **Warmweiß** / **Kaltweiß** – die Kanäle weiterhin einzeln direkt regelbar;
   Helligkeit/Farbtemperatur folgen automatisch.
+
+**Native Licht-Kachel:** Die Variablen nutzen genau die Darstellungen, die
+Symcons „Licht"-Objektdarstellung erwartet (Status = Schalter/An-Aus, Helligkeit
+= Schieberegler/Intensität, Farbtemperatur = Schieberegler/Farbtemperatur). In
+der Kachel-Visualisierung der Instanz die Darstellung **„Licht"** zuweisen →
+Status + Helligkeit + Farbtemperatur erscheinen in **einer** Kachel.
 
 Komfort:
 - **Rückmeldeadresse automatisch erkennen**: stößt den Aktor an und übernimmt

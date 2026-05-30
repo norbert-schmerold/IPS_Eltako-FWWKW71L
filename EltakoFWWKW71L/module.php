@@ -58,8 +58,12 @@ class EltakoFWWKW71L extends IPSModule
     /** Discovery collection window in seconds. */
     private const DISCOVERY_WINDOW = 30;
 
-    /** Colour-temperature variable profile (0 = warm, 100 = cold). */
-    private const CCT_PROFILE = 'EFW.ColorTemp';
+    /**
+     * Colour-temperature endpoints (Kelvin) for the standard ~TWColor slider used
+     * by the native "Licht" tile. T = 0 % maps to warm, T = 100 % to cold.
+     */
+    private const KELVIN_WARM = 2700;
+    private const KELVIN_COLD = 6500;
 
     private const CHANNELS = ['WW', 'KW'];
 
@@ -80,14 +84,13 @@ class EltakoFWWKW71L extends IPSModule
         $this->RegisterAttributeInteger('Last_WW', 100);
         $this->RegisterAttributeInteger('Last_KW', 100);
 
-        // --- Variable profile for the colour-temperature slider (0=warm, 100=cold) ---
-        $this->ensureColorTempProfile();
-
         // --- Variables ---
         // CCT comfort controls (compute WW/KW) plus the raw channels (fully adjustable).
+        // ~Switch / ~Intensity.100 / ~TWColor map to the presentations the native
+        // "Licht" tile expects (An/Aus, Intensität, Farbtemperatur in Kelvin).
         $this->RegisterVariableBoolean('Status', 'Status', '~Switch', 10);
         $this->RegisterVariableInteger('Helligkeit', 'Helligkeit', '~Intensity.100', 20);
-        $this->RegisterVariableInteger('Farbtemperatur', 'Farbtemperatur', self::CCT_PROFILE, 30);
+        $this->RegisterVariableInteger('Farbtemperatur', 'Farbtemperatur', '~TWColor', 30);
         $this->RegisterVariableInteger('WW', 'Warmweiß', '~Intensity.100', 40);
         $this->RegisterVariableInteger('KW', 'Kaltweiß', '~Intensity.100', 50);
 
@@ -96,6 +99,11 @@ class EltakoFWWKW71L extends IPSModule
         $this->EnableAction('Farbtemperatur');
         $this->EnableAction('WW');
         $this->EnableAction('KW');
+
+        // Start the colour temperature at a neutral, valid Kelvin value.
+        if ((int) $this->GetValue('Farbtemperatur') < self::KELVIN_WARM) {
+            $this->SetValue('Farbtemperatur', $this->tempToKelvin(50));
+        }
 
         // --- Timers ---
         $this->RegisterTimer('DiscoveryStop', 0, 'EFW_StopDiscovery($_IPS[\'TARGET\']);');
@@ -298,10 +306,11 @@ class EltakoFWWKW71L extends IPSModule
                 $this->recomputeCct();
                 break;
             case 'Helligkeit':
-                $this->applyCct((int) $Value, (int) $this->GetValue('Farbtemperatur'));
+                $this->applyCct((int) $Value, $this->kelvinToTemp((int) $this->GetValue('Farbtemperatur')));
                 break;
             case 'Farbtemperatur':
-                $this->applyCct((int) $this->GetValue('Helligkeit'), (int) $Value);
+                // The ~TWColor slider delivers Kelvin.
+                $this->applyCct((int) $this->GetValue('Helligkeit'), $this->kelvinToTemp((int) $Value));
                 break;
             case 'Status':
                 if ((bool) $Value) {
@@ -586,7 +595,7 @@ class EltakoFWWKW71L extends IPSModule
         $this->SetWW($ww);
         $this->SetKW($kw);
         $this->SetValue('Helligkeit', $b);
-        $this->SetValue('Farbtemperatur', $t);
+        $this->SetValue('Farbtemperatur', $this->tempToKelvin($t));
     }
 
     /**
@@ -601,22 +610,20 @@ class EltakoFWWKW71L extends IPSModule
         $this->SetValue('Helligkeit', $b);
         if ($b > 0) {
             $t = $ww >= $kw ? (int) round($kw / $ww * 50) : (int) round(100 - $ww / $kw * 50);
-            $this->SetValue('Farbtemperatur', $t);
+            $this->SetValue('Farbtemperatur', $this->tempToKelvin($t));
         }
     }
 
-    /**
-     * Create/refresh the colour-temperature variable profile (idempotent).
-     */
-    private function ensureColorTempProfile(): void
+    /** Internal temperature (0..100, 0 = warm) -> Kelvin for the ~TWColor slider. */
+    private function tempToKelvin(int $t): int
     {
-        if (!IPS_VariableProfileExists(self::CCT_PROFILE)) {
-            IPS_CreateVariableProfile(self::CCT_PROFILE, 1); // 1 = integer
-        }
-        IPS_SetVariableProfileValues(self::CCT_PROFILE, 0, 100, 1);
-        IPS_SetVariableProfileText(self::CCT_PROFILE, '', ' %');
-        IPS_SetVariableProfileDigits(self::CCT_PROFILE, 0);
-        IPS_SetVariableProfileIcon(self::CCT_PROFILE, 'Sun');
+        return self::KELVIN_WARM + (int) round($this->clamp($t) * (self::KELVIN_COLD - self::KELVIN_WARM) / 100);
+    }
+
+    /** Kelvin (from the ~TWColor slider) -> internal temperature (0..100). */
+    private function kelvinToTemp(int $kelvin): int
+    {
+        return $this->clamp((int) round(($kelvin - self::KELVIN_WARM) * 100 / (self::KELVIN_COLD - self::KELVIN_WARM)));
     }
 
     /**

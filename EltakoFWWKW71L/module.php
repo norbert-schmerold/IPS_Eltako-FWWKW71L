@@ -386,6 +386,8 @@ class EltakoFWWKW71L extends IPSModule
      */
     private function sendTelegram(int $offset, int $db3, int $db2, int $db1, int $db0): void
     {
+        // The gateway interface requires the full DataByte0..DataByte12 set
+        // (verified against the native EnOcean modules' BaseData template).
         $payload = [
             'DataID'        => self::TX_DATAID,
             'Device'        => self::RORG_4BS,
@@ -393,6 +395,15 @@ class EltakoFWWKW71L extends IPSModule
             'DeviceID'      => $offset,
             'DestinationID' => -1,
             'DataLength'    => 4,
+            'DataByte12'    => 0,
+            'DataByte11'    => 0,
+            'DataByte10'    => 0,
+            'DataByte9'     => 0,
+            'DataByte8'     => 0,
+            'DataByte7'     => 0,
+            'DataByte6'     => 0,
+            'DataByte5'     => 0,
+            'DataByte4'     => 0,
             'DataByte3'     => $db3,
             'DataByte2'     => $db2,
             'DataByte1'     => $db1,

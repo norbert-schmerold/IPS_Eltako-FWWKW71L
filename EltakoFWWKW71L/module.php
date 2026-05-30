@@ -86,11 +86,18 @@ class EltakoFWWKW71L extends IPSModule
 
         // --- Variables ---
         // CCT comfort controls (compute WW/KW) plus the raw channels (fully adjustable).
-        // ~Switch / ~Intensity.100 / ~TWColor map to the presentations the native
-        // "Licht" tile expects (An/Aus, Intensität, Farbtemperatur in Kelvin).
+        // The presentations match what the native "Licht" tile expects (An/Aus,
+        // Intensität, Farbtemperatur). The colour-temperature slider uses the new
+        // presentation with the colour-temperature template and is limited to the
+        // device's actual range (KELVIN_WARM..KELVIN_COLD).
         $this->RegisterVariableBoolean('Status', 'Status', '~Switch', 10);
         $this->RegisterVariableInteger('Helligkeit', 'Helligkeit', '~Intensity.100', 20);
-        $this->RegisterVariableInteger('Farbtemperatur', 'Farbtemperatur', '~TWColor', 30);
+        $this->RegisterVariableInteger('Farbtemperatur', 'Farbtemperatur', [
+            'PRESENTATION' => VARIABLE_PRESENTATION_SLIDER,
+            'TEMPLATE'     => VARIABLE_TEMPLATE_SLIDER_COLOR_TEMPERATURE,
+            'MIN'          => self::KELVIN_WARM,
+            'MAX'          => self::KELVIN_COLD,
+        ], 30);
         $this->RegisterVariableInteger('WW', 'Warmweiß', '~Intensity.100', 40);
         $this->RegisterVariableInteger('KW', 'Kaltweiß', '~Intensity.100', 50);
 

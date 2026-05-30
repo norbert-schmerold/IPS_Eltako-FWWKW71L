@@ -104,8 +104,9 @@ EFW_AdoptDiscovered($InstanceID, $hexId);  // -> Melde-ID
 Variablen (alle bedienbar) – passend zur nativen **„Licht"-Kachel** von Symcon:
 - **Status** (`~Switch`, An/Aus) – schaltet beim Einschalten auf die **zuletzt**
   bekannte Helligkeit je Kanal zurück (nicht stur 100 %).
-- **Helligkeit** (`~Intensity.100`) + **Farbtemperatur** (`~TWColor`, **Kelvin**
-  2700 = warm … 6500 = kalt) – CCT-Komfort, setzen WW/KW über ein additives
+- **Helligkeit** (`~Intensity.100`) + **Farbtemperatur** (neue Slider-Darstellung
+  mit Farbtemperatur-Template, **auf 2700–6500 K begrenzt** – den tatsächlich
+  einstellbaren Bereich) – CCT-Komfort, setzen WW/KW über ein additives
   Mischmodell: `Helligkeit = max(WW,KW)`. Verlustfreier Round-Trip mit WW/KW.
 - **Warmweiß** / **Kaltweiß** – die Kanäle weiterhin einzeln direkt regelbar;
   Helligkeit/Farbtemperatur folgen automatisch.

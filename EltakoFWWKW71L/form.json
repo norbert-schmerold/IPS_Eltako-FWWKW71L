@@ -36,8 +36,14 @@
             "caption": "Melde-ID (hex, z. B. FFF02404)"
         },
         {
+            "type": "Button",
+            "caption": "Rückmeldeadresse automatisch erkennen",
+            "onClick": "EFW_DetectMelde($id);"
+        },
+        {
             "type": "Label",
-            "caption": "Melde-ID für bidirektionale Antwort (WW und KW über dieselbe Melde-ID, Kanal in DataByte1).   Aktuell: {{MELDE}}"
+            "name": "MeldeStatus",
+            "caption": "WW und KW melden über dieselbe Melde-ID (Kanal in DataByte1). Geräte-ID muss gesetzt sein – der Aktor wird kurz angestoßen.   Aktuell: {{MELDE}}"
         },
         {
             "type": "CheckBox",
@@ -60,22 +66,26 @@
             "onClick": "EFW_TeachIn($id);"
         },
         {
+            "type": "Label",
+            "caption": "Steuerung:"
+        },
+        {
             "type": "RowLayout",
             "items": [
                 {
                     "type": "Button",
-                    "caption": "Test EIN (100/100)",
-                    "onClick": "EFW_SetBoth($id, 100, 100);"
+                    "caption": "Beide 100 %",
+                    "onClick": "EFW_AllOn($id);"
                 },
                 {
                     "type": "Button",
-                    "caption": "Test AUS",
-                    "onClick": "EFW_SwitchOff($id);"
-                },
-                {
-                    "type": "Button",
-                    "caption": "Test 50 %",
+                    "caption": "Beide 50 %",
                     "onClick": "EFW_SetBoth($id, 50, 50);"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Aus",
+                    "onClick": "EFW_SwitchOff($id);"
                 }
             ]
         },

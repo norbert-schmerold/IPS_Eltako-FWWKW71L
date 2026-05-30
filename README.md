@@ -91,17 +91,25 @@ Geräts (gleiche Geräte-ID) ist Teach-In ohnehin nicht nötig.
 EFW_SetWW($InstanceID, $value);            // 0..100
 EFW_SetKW($InstanceID, $value);            // 0..100
 EFW_SetBoth($InstanceID, $ww, $kw);
+EFW_AllOn($InstanceID);                     // beide auf 100 %
 EFW_SwitchOff($InstanceID);
 EFW_TeachIn($InstanceID);                  // ein Teach-In für beide Kanäle
 EFW_PickFreeDeviceID($InstanceID);
+EFW_DetectMelde($InstanceID);              // Melde-ID automatisch erkennen
 EFW_StartDiscovery($InstanceID);
 EFW_StopDiscovery($InstanceID);
 EFW_AdoptDiscovered($InstanceID, $hexId);  // -> Melde-ID
 ```
 
+Komfort:
+- **Status (An/Aus)** schaltet beim Einschalten auf die **zuletzt** bekannte
+  Helligkeit je Kanal zurück (nicht stur auf 100 %).
+- **Rückmeldeadresse automatisch erkennen**: stößt den Aktor an und übernimmt
+  die ID, von der er bestätigt (`DataByte0 = 0x0E`), automatisch ins Melde-ID-Feld.
+
 Geplante Layer (bewusst **nicht** in diesem Modul): CCT-Komfort, Lichtszenen,
-Last-State-Memory, Schlummer/Lichtwecker, Astro, Bidi-Watchdog. Die API hält
-dafür typisierte, magic-freie Einstiegspunkte bereit.
+Schlummer/Lichtwecker, Astro, Bidi-Watchdog. Die API hält dafür typisierte,
+magic-freie Einstiegspunkte bereit.
 
 ## Lizenz
 

@@ -72,11 +72,15 @@ class EltakoFWWKW71L extends IPSModule
 
         // --- Runtime state ---
         $this->RegisterAttributeBoolean('DiscoveryActive', false);
+        $this->RegisterAttributeBoolean('DetectActive', false);
+        // Last non-zero brightness per channel, restored when switching on.
+        $this->RegisterAttributeInteger('Last_WW', 100);
+        $this->RegisterAttributeInteger('Last_KW', 100);
 
         // --- Variables ---
-        $this->RegisterVariableInteger('WW', 'Warmweiß', '~Intensity.100', 10);
-        $this->RegisterVariableInteger('KW', 'Kaltweiß', '~Intensity.100', 20);
-        $this->RegisterVariableBoolean('Status', 'Status', '~Switch', 30);
+        $this->RegisterVariableBoolean('Status', 'Status', '~Switch', 10);
+        $this->RegisterVariableInteger('WW', 'Warmweiß', '~Intensity.100', 20);
+        $this->RegisterVariableInteger('KW', 'Kaltweiß', '~Intensity.100', 30);
 
         $this->EnableAction('WW');
         $this->EnableAction('KW');
@@ -84,6 +88,7 @@ class EltakoFWWKW71L extends IPSModule
 
         // --- Timers ---
         $this->RegisterTimer('DiscoveryStop', 0, 'EFW_StopDiscovery($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('DetectStop', 0, 'EFW_StopDetectMelde($_IPS[\'TARGET\']);');
 
         $this->SetBuffer('Discovery', json_encode([]));
 
@@ -228,6 +233,44 @@ class EltakoFWWKW71L extends IPSModule
         $this->UpdateFormField('MeldeID', 'value', strtoupper(trim($hexId)));
     }
 
+    /**
+     * Switch both channels fully on (100 %).
+     */
+    public function AllOn(): void
+    {
+        $this->SetBoth(100, 100);
+    }
+
+    /**
+     * Auto-detect the Melde-ID: nudge the actor (re-send the current WW value) and
+     * capture the address it confirms from. The result is written into the form's
+     * Melde-ID field; the user still has to save.
+     */
+    public function DetectMelde(): void
+    {
+        if ($this->ReadPropertyInteger('DeviceID') <= 0) {
+            $this->UpdateFormField('MeldeStatus', 'caption', $this->Translate('Bitte zuerst die Geräte-ID setzen.'));
+            return;
+        }
+        $this->WriteAttributeBoolean('DetectActive', true);
+        $this->SetTimerInterval('DetectStop', 6000);
+        $this->UpdateFormField('MeldeStatus', 'caption', $this->Translate('Erkennung läuft … (Aktor wird angestoßen)'));
+        $this->SendDebug('DetectMelde', 'started', 0);
+        // Re-send the current WW value so the actor confirms without changing state.
+        $this->setChannel('WW', $this->clamp((int) $this->GetValue('WW')));
+    }
+
+    /**
+     * Stop the Melde-ID auto-detection (also called by the timer on timeout).
+     */
+    public function StopDetectMelde(): void
+    {
+        if ($this->ReadAttributeBoolean('DetectActive')) {
+            $this->WriteAttributeBoolean('DetectActive', false);
+        }
+        $this->SetTimerInterval('DetectStop', 0);
+    }
+
     // =====================================================================
     // Symcon hooks
     // =====================================================================
@@ -243,8 +286,10 @@ class EltakoFWWKW71L extends IPSModule
                 break;
             case 'Status':
                 if ((bool) $Value) {
-                    // No state memory yet (future layer) -> full on.
-                    $this->SetBoth(100, 100);
+                    // Restore the last non-zero brightness per channel.
+                    $ww = $this->ReadAttributeInteger('Last_WW');
+                    $kw = $this->ReadAttributeInteger('Last_KW');
+                    $this->SetBoth($ww > 0 ? $ww : 100, $kw > 0 ? $kw : 100);
                 } else {
                     $this->SwitchOff();
                 }
@@ -277,6 +322,22 @@ class EltakoFWWKW71L extends IPSModule
 
         // Discovery sees every 4BS telegram so the Melde-ID can be identified.
         $this->maybeRecordDiscovery($sender, $data);
+
+        // Melde-ID auto-detection: the actor's confirmation carries a channel byte
+        // (0x10/0x11) and DataByte0 = 0x0E (our own send echo uses 0x0F). The first
+        // such telegram after triggering a command is the Melde-ID.
+        if ($this->ReadAttributeBoolean('DetectActive')) {
+            $db1 = (int) ($data['DataByte1'] ?? -1);
+            $db0 = (int) ($data['DataByte0'] ?? -1);
+            if (($db1 === self::DB1_WW || $db1 === self::DB1_KW) && $db0 === 0x0E) {
+                $hex = strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT));
+                $this->StopDetectMelde();
+                $this->UpdateFormField('MeldeID', 'value', $hex);
+                $this->UpdateFormField('MeldeStatus', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
+                $this->SendDebug('DetectMelde', 'detected ' . $hex, 0);
+                return '';
+            }
+        }
 
         // Only the actor's own Melde-ID carries our channel state.
         $melde = $this->meldeIdValue();
@@ -347,6 +408,14 @@ class EltakoFWWKW71L extends IPSModule
         return $channel === 'KW' ? self::DB1_KW : self::DB1_WW;
     }
 
+    /** Remember a channel's last non-zero brightness (for the Status-on restore). */
+    private function rememberLast(string $channel, int $value): void
+    {
+        if ($value > 0) {
+            $this->WriteAttributeInteger('Last_' . $channel, $value);
+        }
+    }
+
     /**
      * Send a dim command for one channel and (optionally) update the variable.
      * Both channels use the same sender offset (Geräte-ID); the channel is
@@ -360,6 +429,7 @@ class EltakoFWWKW71L extends IPSModule
             $this->SendDebug('TX ' . $channel, 'no Geräte-ID set, ignored', 0);
             return;
         }
+        $this->rememberLast($channel, $value);
 
         $raw = (int) round($value * self::VALUE_MAX / 100);
         $db3 = ($raw >> 8) & 0xFF;   // high 2 bits
@@ -387,6 +457,7 @@ class EltakoFWWKW71L extends IPSModule
     private function applyFeedback(string $channel, int $level, bool $on): void
     {
         $value = $on ? $level : 0;
+        $this->rememberLast($channel, $value);
         $this->SetValue($channel, $value);
         $this->recomputeStatus();
         $this->SendDebug('RX feedback ' . $channel, sprintf('level=%d on=%d', $level, $on ? 1 : 0), 0);

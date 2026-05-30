@@ -42,6 +42,10 @@
         },
         {
             "type": "Label",
+            "caption": "Tipp: „Automatisch erkennen\" klicken und den Aktor innerhalb 20 s am Taster EIN/AUS schalten – die Melde-ID wird übernommen."
+        },
+        {
+            "type": "Label",
             "name": "InfoLabel",
             "caption": "{{INFO}}"
         },

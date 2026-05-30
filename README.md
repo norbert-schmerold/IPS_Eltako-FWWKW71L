@@ -44,10 +44,16 @@ erkannte Format im Formular an:
   Wert 10-Bit in `DataByte3:DataByte2`. **Eine** Melde-ID.
 - **Prozent**: `DataByte3 = 0x02`, `DataByte2` = `0…100 %`, `DataByte0` =
   `0x09`/`0x08`. Kanal über die **ID** – der Aktor sendet ab seiner Base-ID:
-  WW = **Base ID+1** (= Melde-ID), KW = Base ID+2 (= Melde-ID + 1),
-  „Alle Kanäle" = Base ID+3, **Master-Telegramm = Base ID+4**. Als Melde-ID
-  zählt die **WW-Adresse (Base ID+1)** – die *niedrigste*; *Automatisch erkennen*
-  nimmt automatisch die niedrigste. Master/Alle-Kanäle nicht eintragen.
+  WW = **Base ID+1** (= Melde-ID), KW = Base ID+2 (= Melde-ID + 1). Als Melde-ID
+  zählt die **WW-Adresse (Base ID+1)**.
+
+> **Master-Telegramm:** Zusätzlich sendet der Aktor ein **Master-Telegramm**
+> (Base ID+4, z. B. `FFF00984`) – und zwar im **hochauflösenden** Format, auch
+> wenn die Kanäle Prozent melden. Eine reine Status-Abfrage löst **nur** dieses
+> Master-Telegramm aus, nicht die Kanäle. Deshalb wertet die Melde-ID-Erkennung
+> die **echten Kanal-Rückmeldungen beim Schalten** aus (siehe Einrichtung) und
+> bevorzugt die Prozent-Adresse (`Base ID+1`) gegenüber dem hochauflösenden
+> Master. Das Master-Telegramm wird im Normalbetrieb ignoriert.
 
 Drei GUIDs mit unterschiedlichen Rollen (gemäß
 [Symcon-Datenfluss-Doku](https://www.symcon.de/de/service/dokumentation/entwicklerbereich/sdk-tools/sdk-php/datenfluss/)
@@ -83,9 +89,11 @@ Senden ist immer hochauflösend, das Empfangsformat wird automatisch erkannt:
    Gerät *Freie Geräte-ID wählen* klicken.
 2. **Einlernen** (nur neues Gerät): am Aktor den mittleren **Drehschalter auf
    Position 8** stellen, dann *Einlernen* klicken.
-3. **Melde-ID** ermitteln: *Automatisch erkennen* klicken (fragt den Aktor per
-   Status-Telegramm ab und übernimmt die Antwort-Adresse) – oder *Suchen* und
-   aus der Liste übernehmen. Danach **speichern**.
+3. **Melde-ID** ermitteln: *Automatisch erkennen* klicken und **innerhalb von
+   20 s den Aktor am Taster EIN und AUS schalten**. Das Modul liest die
+   Kanal-Rückmeldung mit und trägt die WW-Adresse ein. (Alternativ *Suchen*,
+   Aktor schalten, niedrigste Adresse übernehmen – oder die Melde-ID direkt
+   eintragen.) Danach **speichern**.
 4. Fertig. Das Formular zeigt das **erkannte Empfangsformat** (hochauflösend
    oder Prozent). Steuern/Status laufen, auch bei Taster-Bedienung des Aktors.
 

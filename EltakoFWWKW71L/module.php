@@ -304,12 +304,15 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Auto-detect the Melde-ID: ask the actor for its state (status request,
-     * which does not change the output) and collect the addresses it confirms
-     * from. The actor sends several (warmweiß = Base ID+1, kaltweiß = +2, alle
-     * Kanäle = +3, Master = +4); the lowest is the warm-white channel and the
-     * correct Melde-ID. It is written into the form field on the timer stop;
-     * the user still has to save.
+     * Auto-detect the Melde-ID by listening to the actor's channel confirmations.
+     *
+     * A status request only triggers the actor's Master telegram (Base ID+4),
+     * which a percent actor sends in hi-res form (e.g. FFF00984) and which cannot
+     * be mapped back to the channel address reliably. The real per-channel
+     * confirmations (warmweiß = Base ID+1, kaltweiß = +2) are only emitted on a
+     * state change, so the user switches the actor while detection is armed.
+     * StopDetectMelde() then prefers the lowest percent address (= warmweiß) and
+     * falls back to hi-res (single Melde-ID actor).
      */
     public function DetectMelde(): void
     {
@@ -319,19 +322,17 @@ class EltakoFWWKW71L extends IPSModule
         }
         $this->SetBuffer('DetectCandidates', json_encode([]));
         $this->WriteAttributeBoolean('DetectActive', true);
-        $this->SetTimerInterval('DetectStop', 4000);
-        $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Erkennung läuft … (Status wird abgefragt)'));
+        $this->SetTimerInterval('DetectStop', 20000);
+        $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Erkennung läuft – schalte den Aktor jetzt am Taster EIN und AUS (20 s) …'));
         $this->SendDebug('DetectMelde', 'started', 0);
         $this->sendStatusRequest();
     }
 
     /**
-     * Finish Melde-ID detection (called by the timer) and derive the warm-white
-     * Melde-ID (Base ID+1) from the collected confirmation addresses:
-     *   - hi-res: the actor confirms from a single address -> use it directly;
-     *   - percent: a status request only triggers the Master telegram (Base ID+4),
-     *     so the warm-white channel = Master - 3. If several channel addresses
-     *     were collected (e.g. the actor was switched), the lowest is Base ID+1.
+     * Finish Melde-ID detection (called by the timer): pick the warm-white
+     * channel address. Percent channel confirmations (Base ID+1 = warmweiß,
+     * +2 = kaltweiß) are preferred over a hi-res Master telegram, so the lowest
+     * percent address wins; a pure hi-res actor uses its single confirm address.
      */
     public function StopDetectMelde(): void
     {
@@ -344,7 +345,7 @@ class EltakoFWWKW71L extends IPSModule
 
         $list = json_decode($this->GetBuffer('DetectCandidates'), true);
         if (!is_array($list) || count($list) === 0) {
-            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Keine Rückmeldung erkannt. Aktor schalten und erneut versuchen, oder Melde-ID manuell eintragen.'));
+            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Keine Rückmeldung erkannt. Aktor am Taster EIN/AUS schalten und erneut versuchen, oder Melde-ID manuell eintragen.'));
             return;
         }
 
@@ -358,25 +359,19 @@ class EltakoFWWKW71L extends IPSModule
             }
         }
 
-        $note = '';
-        if (count($hires) > 0) {
+        // Prefer the per-channel percent confirmation (warmweiß = lowest = Base ID+1)
+        // over a hi-res Master telegram, which a percent actor also emits.
+        if (count($percent) > 0) {
+            sort($percent);
+            $pick = $percent[0];
+        } else {
             sort($hires);
             $pick = $hires[0];
-        } else {
-            sort($percent);
-            if (count($percent) === 1) {
-                // Only the Master (Base ID+4) answered the status request.
-                $master = $percent[0];
-                $pick = $master - 3;
-                $note = sprintf($this->Translate(' (Master %08X − 3)'), $master);
-            } else {
-                $pick = $percent[0]; // lowest channel address = warmweiß (Base ID+1)
-            }
         }
 
         $hex = strtoupper(str_pad(dechex($pick), 8, '0', STR_PAD_LEFT));
         $this->UpdateFormField('MeldeID', 'value', $hex);
-        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s%s — bitte speichern.'), $hex, $note));
+        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
         $this->SendDebug('DetectMelde', 'picked ' . $hex . ' from ' . count($list) . ' candidate(s)', 0);
     }
 

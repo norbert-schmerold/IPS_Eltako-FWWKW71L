@@ -23,7 +23,21 @@
         },
         {
             "type": "Label",
-            "caption": "Sende-Adresse (WW und KW über dieselbe Adresse, Kanal in DataByte1): {{SENDER}}"
+            "caption": "Sende-Adresse: {{SENDER}}"
+        },
+        {
+            "type": "Select",
+            "name": "SendFormat",
+            "caption": "Sende-Format",
+            "options": [
+                { "caption": "Prozent (DataByte2 = 0–100, WW=ID / KW=ID+1)", "value": "percent" },
+                { "caption": "Hochauflösend (10-Bit, Kanal in DataByte1, eine ID)", "value": "hires" }
+            ]
+        },
+        {
+            "type": "Label",
+            "name": "DetectedFormatLabel",
+            "caption": "Empfangenes Format (automatisch erkannt): {{DETECTED}}"
         },
         {
             "type": "CheckBox",
@@ -33,7 +47,7 @@
         {
             "type": "ValidationTextBox",
             "name": "MeldeID",
-            "caption": "Melde-ID (hex, z. B. FFF02404)"
+            "caption": "Melde-ID (hex). Prozent: WW-ID (KW = +1). Hochauflösend: eine ID (z. B. FFF02404)."
         },
         {
             "type": "Button",
@@ -43,7 +57,7 @@
         {
             "type": "Label",
             "name": "MeldeStatus",
-            "caption": "WW und KW melden über dieselbe Melde-ID (Kanal in DataByte1). Geräte-ID muss gesetzt sein – der Aktor wird kurz angestoßen.   Aktuell: {{MELDE}}"
+            "caption": "Empfang wird automatisch dekodiert (beide Formate). Geräte-ID muss gesetzt sein – der Aktor wird kurz angestoßen.   Aktuell: {{MELDE}}"
         },
         {
             "type": "CheckBox",

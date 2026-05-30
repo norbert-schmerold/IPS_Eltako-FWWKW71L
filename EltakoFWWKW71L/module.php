@@ -14,12 +14,14 @@ declare(strict_types=1);
  *     report from it, again distinguished by DataByte1.
  *   - ONE teach-in for both channels.
  *
- * Telegram format verified against a live sniff of the native module
- * (EEP 07-3F-7F, 4BS, high resolution): Device=165, DataLength=4,
- *   DataByte3 = high 2 bits of a 10-bit value (0..1023)
- *   DataByte2 = low byte of that value          (1023 = 100 %)
- *   DataByte1 = channel: 0x10 = WW, 0x11 = KW
- *   DataByte0 = 0x0F (command); the actor confirms with 0x0E
+ * Two telegram formats are supported (the actor's "Dimmwert in % senden" PCT14
+ * setting), both verified against live sniffs; the receive side auto-detects:
+ *   Percent : Device=165, DB3=0x02, DB2=0..100, DB0=0x09/0x08; channel per ID
+ *             (WW=Melde-ID, KW=Melde-ID+1; send WW=offset, KW=offset+1).
+ *   Hi-res  : Device=165, value = (DB3<<8)|DB2 (0..1023), DB1=channel
+ *             (0x10=WW, 0x11=KW), DB0=0x0F (actor confirms 0x0E); single ID.
+ * The send format is chosen via the SendFormat property; the detected receive
+ * format is shown in the form.
  */
 class EltakoFWWKW71L extends IPSModule
 {
@@ -33,6 +35,21 @@ class EltakoFWWKW71L extends IPSModule
 
     /** RORG 4BS (0xA5). */
     private const RORG_4BS = 165;
+
+    // --- Telegram formats (the actor's "Dimmwert in % senden" PCT14 setting) ---
+    /** Percentage format: DataByte2 = 0..100, two consecutive Melde-/Sender-IDs. */
+    private const FORMAT_PERCENT = 'percent';
+    /** High-resolution format: 10-bit value, channel in DataByte1, single ID. */
+    private const FORMAT_HIRES = 'hires';
+
+    // Percentage format bytes.
+    /** DataByte3 marker of a percentage dim telegram. */
+    private const DB3_DIM = 0x02;
+    /** DataByte0 on/off for the percentage format. */
+    private const DB0_ON = 0x09;
+    private const DB0_OFF = 0x08;
+
+    // High-resolution format.
     /**
      * High-resolution dim value is 10-bit (0..1023), split across two bytes:
      * DataByte3 = high 2 bits, DataByte2 = low byte. 1023 = 100 %.
@@ -41,7 +58,7 @@ class EltakoFWWKW71L extends IPSModule
     /** Channel selector in DataByte1 (verified): WW = 0x10, KW = 0x11. */
     private const DB1_WW = 0x10;
     private const DB1_KW = 0x11;
-    /** DataByte0 of an outgoing command (the actor confirms with 0x0E). */
+    /** DataByte0 of an outgoing hi-res command (the actor confirms with 0x0E). */
     private const DB0_CMD = 0x0F;
 
     /**
@@ -74,12 +91,16 @@ class EltakoFWWKW71L extends IPSModule
         // --- Properties (mirror the native module's single-ID form) ---
         $this->RegisterPropertyInteger('DeviceID', 0);     // Geräte-ID (sender offset)
         $this->RegisterPropertyString('MeldeID', '');      // bidi feedback base ID (hex)
+        // Send telegram format (matches the actor's "Dimmwert in % senden" setting).
+        $this->RegisterPropertyString('SendFormat', self::FORMAT_PERCENT);
         $this->RegisterPropertyBoolean('EmulateStatus', false);
         $this->RegisterPropertyBoolean('DebugPromiscuous', false);
 
         // --- Runtime state ---
         $this->RegisterAttributeBoolean('DiscoveryActive', false);
         $this->RegisterAttributeBoolean('DetectActive', false);
+        // Last format auto-detected from incoming telegrams (for display).
+        $this->RegisterAttributeString('DetectedFormat', '');
         // Last non-zero brightness per channel, restored when switching on.
         $this->RegisterAttributeInteger('Last_WW', 100);
         $this->RegisterAttributeInteger('Last_KW', 100);
@@ -359,42 +380,41 @@ class EltakoFWWKW71L extends IPSModule
         // Discovery sees every 4BS telegram so the Melde-ID can be identified.
         $this->maybeRecordDiscovery($sender, $data);
 
-        // Melde-ID auto-detection: the actor's confirmation carries a channel byte
-        // (0x10/0x11) and DataByte0 = 0x0E (our own send echo uses 0x0F). The first
-        // such telegram after triggering a command is the Melde-ID.
-        if ($this->ReadAttributeBoolean('DetectActive')) {
-            $db1 = (int) ($data['DataByte1'] ?? -1);
-            $db0 = (int) ($data['DataByte0'] ?? -1);
-            if (($db1 === self::DB1_WW || $db1 === self::DB1_KW) && $db0 === 0x0E) {
-                $hex = strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT));
-                $this->StopDetectMelde();
-                $this->UpdateFormField('MeldeID', 'value', $hex);
-                $this->UpdateFormField('MeldeStatus', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
-                $this->SendDebug('DetectMelde', 'detected ' . $hex, 0);
-                return '';
-            }
+        // Melde-ID auto-detection (button): capture the address the actor confirms from.
+        if ($this->ReadAttributeBoolean('DetectActive') && $this->captureMeldeId($sender, $data)) {
+            return '';
         }
 
-        // Only the actor's own Melde-ID carries our channel state.
         $melde = $this->meldeIdValue();
-        if ($melde === 0 || $sender !== $melde) {
+        if ($melde === 0) {
             return '';
         }
 
-        // Channel from DataByte1 (0x10 = WW, 0x11 = KW); ignore anything else.
         $db1 = (int) ($data['DataByte1'] ?? -1);
-        if ($db1 === self::DB1_WW) {
-            $channel = 'WW';
-        } elseif ($db1 === self::DB1_KW) {
-            $channel = 'KW';
-        } else {
+        $db3 = (int) ($data['DataByte3'] ?? 0);
+        $db2 = (int) ($data['DataByte2'] ?? 0);
+        $db0 = (int) ($data['DataByte0'] ?? 0);
+
+        // Format auto-detection.
+        // High-resolution: single Melde-ID, channel in DataByte1, 10-bit value.
+        if ($sender === $melde && ($db1 === self::DB1_WW || $db1 === self::DB1_KW)) {
+            $channel = $db1 === self::DB1_WW ? 'WW' : 'KW';
+            $level = $this->clamp((int) round((($db3 << 8) | $db2) * 100 / self::VALUE_MAX));
+            $this->setDetectedFormat(self::FORMAT_HIRES);
+            $this->applyFeedback($channel, $level, $level > 0);
             return '';
         }
 
-        // 10-bit value (DataByte3 high bits, DataByte2 low byte) -> 0..100 %.
-        $raw = (((int) ($data['DataByte3'] ?? 0)) << 8) | ((int) ($data['DataByte2'] ?? 0));
-        $level = $this->clamp((int) round($raw * 100 / self::VALUE_MAX));
-        $this->applyFeedback($channel, $level, $level > 0);
+        // Percentage: two Melde-IDs (base = WW, base+1 = KW), value in DataByte2,
+        // on/off in DataByte0 bit0, DataByte3 = 0x02 marks the dim telegram.
+        if (($sender === $melde || $sender === $melde + 1) && $db3 === self::DB3_DIM) {
+            $channel = $sender === $melde ? 'WW' : 'KW';
+            $on = ($db0 & 0x01) === 0x01;
+            $level = $this->clamp($db2);
+            $this->setDetectedFormat(self::FORMAT_PERCENT);
+            $this->applyFeedback($channel, $on ? $level : 0, $on);
+            return '';
+        }
 
         return '';
     }
@@ -411,10 +431,12 @@ class EltakoFWWKW71L extends IPSModule
         $melde = $this->meldeIdValue();
         $meldeStr = $melde === 0 ? '—' : sprintf('%08X', $melde);
 
+        $detected = $this->formatLabel($this->ReadAttributeString('DetectedFormat'));
+
         $json = json_encode($form);
         $json = str_replace(
-            ['{{BASEID}}', '{{SENDER}}', '{{MELDE}}'],
-            [$baseStr, $senderStr, $meldeStr],
+            ['{{BASEID}}', '{{SENDER}}', '{{MELDE}}', '{{DETECTED}}'],
+            [$baseStr, $senderStr, $meldeStr, $detected],
             $json
         );
 
@@ -444,6 +466,60 @@ class EltakoFWWKW71L extends IPSModule
         return $channel === 'KW' ? self::DB1_KW : self::DB1_WW;
     }
 
+    /** Human-readable label for a telegram format. */
+    private function formatLabel(string $format): string
+    {
+        if ($format === self::FORMAT_HIRES) {
+            return $this->Translate('Hochauflösend (10-Bit, Kanal in DataByte1, eine Melde-ID)');
+        }
+        if ($format === self::FORMAT_PERCENT) {
+            return $this->Translate('Prozent (DataByte2 = 0–100, zwei Melde-IDs)');
+        }
+        return $this->Translate('noch nichts empfangen');
+    }
+
+    /** Remember the auto-detected receive format and reflect it in the form. */
+    private function setDetectedFormat(string $format): void
+    {
+        if ($this->ReadAttributeString('DetectedFormat') === $format) {
+            return;
+        }
+        $this->WriteAttributeString('DetectedFormat', $format);
+        $this->UpdateFormField('DetectedFormatLabel', 'caption', $this->Translate('Empfangenes Format: ') . $this->formatLabel($format));
+        $this->SendDebug('Format', 'detected ' . $format, 0);
+    }
+
+    /**
+     * During Melde-ID detection, capture the address the actor confirms from.
+     * Excludes our own send echo (BaseID + offset) and accepts both formats:
+     * hi-res confirm (channel byte + DataByte0 = 0x0E) or a percentage dim
+     * telegram (DataByte3 = 0x02, LRN data bit set).
+     */
+    private function captureMeldeId(int $sender, array $data): bool
+    {
+        $base = $this->getBaseID();
+        $offset = $this->ReadPropertyInteger('DeviceID');
+        if ($base !== null && $offset > 0 && ($sender === $base + $offset || $sender === $base + $offset + 1)) {
+            return false; // our own echo
+        }
+
+        $db1 = (int) ($data['DataByte1'] ?? -1);
+        $db0 = (int) ($data['DataByte0'] ?? -1);
+        $db3 = (int) ($data['DataByte3'] ?? -1);
+        $isHires = ($db1 === self::DB1_WW || $db1 === self::DB1_KW) && $db0 === 0x0E;
+        $isPercent = $db3 === self::DB3_DIM && ($db0 & 0x08) === 0x08;
+        if (!$isHires && !$isPercent) {
+            return false;
+        }
+
+        $hex = strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT));
+        $this->StopDetectMelde();
+        $this->UpdateFormField('MeldeID', 'value', $hex);
+        $this->UpdateFormField('MeldeStatus', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
+        $this->SendDebug('DetectMelde', 'detected ' . $hex, 0);
+        return true;
+    }
+
     /** Remember a channel's last non-zero brightness (for the Status-on restore). */
     private function rememberLast(string $channel, int $value): void
     {
@@ -453,9 +529,11 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Send a dim command for one channel and (optionally) update the variable.
-     * Both channels use the same sender offset (Geräte-ID); the channel is
-     * encoded in DataByte1. The 0..100 % value is scaled to the 10-bit telegram.
+     * Send a dim command for one channel (in the configured send format) and
+     * optionally reflect the value immediately (status emulation).
+     *
+     * Hi-res: both channels use the same offset, channel in DataByte1, 10-bit value.
+     * Percent: WW = offset, KW = offset + 1, value in DataByte2, on/off in DataByte0.
      */
     private function setChannel(string $channel, int $value): void
     {
@@ -467,17 +545,20 @@ class EltakoFWWKW71L extends IPSModule
         }
         $this->rememberLast($channel, $value);
 
-        $raw = (int) round($value * self::VALUE_MAX / 100);
-        $db3 = ($raw >> 8) & 0xFF;   // high 2 bits
-        $db2 = $raw & 0xFF;          // low byte
-        $db1 = $this->channelByte($channel);
-
-        $this->SendDebug(
-            'TX ' . $channel,
-            sprintf('offset=%d pct=%d raw=%d DB3..0=%02X %02X %02X %02X', $offset, $value, $raw, $db3, $db2, $db1, self::DB0_CMD),
-            0
-        );
-        $this->sendTelegram($offset, $db3, $db2, $db1, self::DB0_CMD);
+        if ($this->ReadPropertyString('SendFormat') === self::FORMAT_HIRES) {
+            $raw = (int) round($value * self::VALUE_MAX / 100);
+            $db3 = ($raw >> 8) & 0xFF;   // high 2 bits
+            $db2 = $raw & 0xFF;          // low byte
+            $db1 = $this->channelByte($channel);
+            $this->SendDebug('TX ' . $channel, sprintf('hires offset=%d pct=%d raw=%d', $offset, $value, $raw), 0);
+            $this->sendTelegram($offset, $db3, $db2, $db1, self::DB0_CMD);
+        } else {
+            // Percentage: WW = offset, KW = offset + 1.
+            $choff = $channel === 'KW' ? $offset + 1 : $offset;
+            $db0 = $value > 0 ? self::DB0_ON : self::DB0_OFF;
+            $this->SendDebug('TX ' . $channel, sprintf('percent offset=%d level=%d db0=0x%02X', $choff, $value, $db0), 0);
+            $this->sendTelegram($choff, self::DB3_DIM, $value, 0x00, $db0);
+        }
 
         // Status emulation: reflect the command immediately when bidi feedback
         // is not trusted/available; otherwise the variable follows the actor.

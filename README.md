@@ -19,17 +19,28 @@ den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
   EnOcean-Gateway (`ConnectParent`). Nachbau des nativen Moduls
   **„Eltako FWWKW71L (Hochauflösender WW/CW)"**.
 - Telegramme: **4BS, freies Profil 07-3F-7F**, RORG `0xA5` (= `Device: 165`).
-- **Eine Geräte-ID** (Sende-Offset auf der Gateway-BaseID): **beide** Kanäle
-  senden über dieselbe Adresse, der Kanal steckt in `DataByte1`.
-- **Eine Melde-ID** (Rückmelde-Adresse des Aktors): **beide** Kanäle melden über
-  dieselbe Melde-ID, Kanal ebenfalls in `DataByte1`.
-- Dimm-/Rückmelde-Telegramm (gegen Live-Mitschnitt des Original-Moduls
-  verifiziert, `DataLength = 4`, **10-Bit-Auflösung**):
+- **Zwei Telegramm-Formate** werden unterstützt (entspricht der PCT14-Einstellung
+  „Dimmwert in % senden ein/aus" des Aktors). Der **Empfang erkennt das Format
+  automatisch** und zeigt es im Formular an; das **Sende-Format** wählst du per
+  Property (anhand der Anzeige).
+
+  **Prozent** (DataByte2 direkt, zwei IDs):
 
   | Byte | Wert |
   | --- | --- |
-  | `DataByte3` | obere 2 Bit des 10-Bit-Werts (0–3) |
-  | `DataByte2` | untere 8 Bit des Werts → `Wert = DataByte3·256 + DataByte2`, `0…1023` (1023 = 100 %) |
+  | `DataByte3` | `0x02` (Dimm-Marker) |
+  | `DataByte2` | Helligkeit `0…100 %` |
+  | `DataByte1` | `0x00` |
+  | `DataByte0` | `0x09` = ein, `0x08` = aus |
+
+  → Kanal über die **ID**: WW = Geräte-ID / Melde-ID, KW = **+1**.
+
+  **Hochauflösend** (10-Bit, Kanal im Byte, eine ID):
+
+  | Byte | Wert |
+  | --- | --- |
+  | `DataByte3` | obere 2 Bit |
+  | `DataByte2` | untere 8 Bit → `Wert = DataByte3·256 + DataByte2`, `0…1023` (1023 = 100 %) |
   | `DataByte1` | Kanal: `0x10` = WW, `0x11` = KW |
   | `DataByte0` | `0x0F` = Befehl (Aktor antwortet mit `0x0E`) |
 

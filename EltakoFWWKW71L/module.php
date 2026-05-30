@@ -16,12 +16,18 @@ declare(strict_types=1);
 class EltakoFWWKW71L extends IPSModule
 {
     /**
-     * EnOcean gateway data interface this module connects to (ConnectParent).
-     * Same GUID is used as the payload DataID when sending to the gateway.
-     * Verified against the native EnOcean device modules (see TX_DATAID).
+     * MODULE GUID of the native EnOcean Gateway/Configurator. ConnectParent
+     * uses this to auto-create/attach the parent gateway instance. This is a
+     * module id, NOT a data interface — distinct from TX_DATAID below.
+     * Verified against the native EnOcean device modules
+     * (nefiertsrebliS/MoreEnoceanFeatures: ConnectParent("{A52FEFE9-...}")).
      */
-    private const PARENT_GUID = '{70E3075F-A35D-4DEB-AC20-C929A156FE48}';
-    /** DataID for Device -> Gateway (send); identical to the parent interface GUID. */
+    private const GATEWAY_MODULE_GUID = '{A52FEFE9-7858-4B8E-A96E-26E15CB944F7}';
+    /**
+     * Data INTERFACE GUID for the gateway <-> device link. Used as the payload
+     * DataID when sending, and declared as the module's parentRequirements in
+     * module.json. Distinct from the gateway's module GUID above.
+     */
     private const TX_DATAID = '{70E3075F-A35D-4DEB-AC20-C929A156FE48}';
 
     /** RORG 4BS (0xA5). */
@@ -75,7 +81,7 @@ class EltakoFWWKW71L extends IPSModule
 
         $this->SetBuffer('Discovery', json_encode([]));
 
-        $this->ConnectParent(self::PARENT_GUID);
+        $this->ConnectParent(self::GATEWAY_MODULE_GUID);
     }
 
     public function Destroy()
@@ -87,7 +93,7 @@ class EltakoFWWKW71L extends IPSModule
     {
         parent::ApplyChanges();
 
-        $this->ConnectParent(self::PARENT_GUID);
+        $this->ConnectParent(self::GATEWAY_MODULE_GUID);
         $this->autoAssignOffsets();
 
         // Receive filter: in promiscuous mode receive everything, otherwise only 4BS.

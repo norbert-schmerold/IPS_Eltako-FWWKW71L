@@ -25,14 +25,21 @@ den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
   (BaseID +1 = WW, +2 = KW), die gegen die konfigurierten **ReturnIDs** gematcht
   werden.
 
-| GUID | Bedeutung |
-| --- | --- |
-| `{70E3075F-A35D-4DEB-AC20-C929A156FE48}` | ParentRequirement (EnOcean-Gateway) **und** DataID Device → Gateway (Senden) |
-| `{DE2DA2C0-7A28-4D23-A9AA-6D1C7609C7EC}` | Implemented-Interface, DataID Gateway → Device (Empfang) |
+Drei GUIDs mit unterschiedlichen Rollen (gemäß
+[Symcon-Datenfluss-Doku](https://www.symcon.de/de/service/dokumentation/entwicklerbereich/sdk-tools/sdk-php/datenfluss/)
+und [ConnectParent](https://www.symcon.de/de/service/dokumentation/entwicklerbereich/sdk-tools/sdk-php/module/connectparent/)):
 
-Die GUIDs und die Telegramm-Feldnamen (`Device`, `DeviceID`, `DestinationID`,
-`DataLength`, `DataByte3..0`) wurden gegen die nativen EnOcean-Gerätemodule
-verifiziert (Referenz: [nefiertsrebliS/MoreEnoceanFeatures](https://github.com/nefiertsrebliS/MoreEnoceanFeatures)).
+| GUID | Rolle | Wo |
+| --- | --- | --- |
+| `{A52FEFE9-7858-4B8E-A96E-26E15CB944F7}` | **Modul-GUID** des nativen EnOcean-Gateways | `ConnectParent()` in `module.php` |
+| `{70E3075F-A35D-4DEB-AC20-C929A156FE48}` | **Daten-Interface** Device → Gateway (Senden), DataID | `parentRequirements` + Payload-`DataID` |
+| `{DE2DA2C0-7A28-4D23-A9AA-6D1C7609C7EC}` | **Daten-Interface** Gateway → Device (Empfang) | `implemented` |
+
+`ConnectParent` erwartet laut Doku eine **Modul-ID**, nicht die Interface-GUID;
+`parentRequirements`/`implemented` enthalten dagegen die **Datenpakettyp-GUIDs**.
+GUIDs und Telegramm-Feldnamen (`Device`, `DeviceID`, `DestinationID`,
+`DataLength`, `DataByte3..0`) gegen die nativen EnOcean-Gerätemodule verifiziert
+(Referenz: [nefiertsrebliS/MoreEnoceanFeatures](https://github.com/nefiertsrebliS/MoreEnoceanFeatures)).
 
 ## Installation
 

@@ -58,6 +58,9 @@ class EltakoFWWKW71L extends IPSModule
     /** Discovery collection window in seconds. */
     private const DISCOVERY_WINDOW = 30;
 
+    /** Colour-temperature variable profile (0 = warm, 100 = cold). */
+    private const CCT_PROFILE = 'EFW.ColorTemp';
+
     private const CHANNELS = ['WW', 'KW'];
 
     public function Create()
@@ -77,14 +80,22 @@ class EltakoFWWKW71L extends IPSModule
         $this->RegisterAttributeInteger('Last_WW', 100);
         $this->RegisterAttributeInteger('Last_KW', 100);
 
-        // --- Variables ---
-        $this->RegisterVariableBoolean('Status', 'Status', '~Switch', 10);
-        $this->RegisterVariableInteger('WW', 'Warmweiß', '~Intensity.100', 20);
-        $this->RegisterVariableInteger('KW', 'Kaltweiß', '~Intensity.100', 30);
+        // --- Variable profile for the colour-temperature slider (0=warm, 100=cold) ---
+        $this->ensureColorTempProfile();
 
+        // --- Variables ---
+        // CCT comfort controls (compute WW/KW) plus the raw channels (fully adjustable).
+        $this->RegisterVariableBoolean('Status', 'Status', '~Switch', 10);
+        $this->RegisterVariableInteger('Helligkeit', 'Helligkeit', '~Intensity.100', 20);
+        $this->RegisterVariableInteger('Farbtemperatur', 'Farbtemperatur', self::CCT_PROFILE, 30);
+        $this->RegisterVariableInteger('WW', 'Warmweiß', '~Intensity.100', 40);
+        $this->RegisterVariableInteger('KW', 'Kaltweiß', '~Intensity.100', 50);
+
+        $this->EnableAction('Status');
+        $this->EnableAction('Helligkeit');
+        $this->EnableAction('Farbtemperatur');
         $this->EnableAction('WW');
         $this->EnableAction('KW');
-        $this->EnableAction('Status');
 
         // --- Timers ---
         $this->RegisterTimer('DiscoveryStop', 0, 'EFW_StopDiscovery($_IPS[\'TARGET\']);');
@@ -280,9 +291,17 @@ class EltakoFWWKW71L extends IPSModule
         switch ($Ident) {
             case 'WW':
                 $this->SetWW((int) $Value);
+                $this->recomputeCct();
                 break;
             case 'KW':
                 $this->SetKW((int) $Value);
+                $this->recomputeCct();
+                break;
+            case 'Helligkeit':
+                $this->applyCct((int) $Value, (int) $this->GetValue('Farbtemperatur'));
+                break;
+            case 'Farbtemperatur':
+                $this->applyCct((int) $this->GetValue('Helligkeit'), (int) $Value);
                 break;
             case 'Status':
                 if ((bool) $Value) {
@@ -293,6 +312,7 @@ class EltakoFWWKW71L extends IPSModule
                 } else {
                     $this->SwitchOff();
                 }
+                $this->recomputeCct();
                 break;
             default:
                 throw new Exception('Invalid action ident: ' . $Ident);
@@ -460,6 +480,7 @@ class EltakoFWWKW71L extends IPSModule
         $this->rememberLast($channel, $value);
         $this->SetValue($channel, $value);
         $this->recomputeStatus();
+        $this->recomputeCct();
         $this->SendDebug('RX feedback ' . $channel, sprintf('level=%d on=%d', $level, $on ? 1 : 0), 0);
     }
 
@@ -540,6 +561,62 @@ class EltakoFWWKW71L extends IPSModule
     {
         $on = $this->GetValue('WW') > 0 || $this->GetValue('KW') > 0;
         $this->SetValue('Status', $on);
+    }
+
+    /**
+     * Drive both channels from a brightness + colour-temperature pair and reflect
+     * the values in the CCT variables.
+     *
+     * Additive mix (lossless round-trip with recomputeCct):
+     *   brightness B = max(WW, KW); temperature T: 0 = warm (WW), 100 = cold (KW).
+     *   T <= 50: WW = B,                 KW = B * T / 50
+     *   T >  50: KW = B, WW = B * (100 - T) / 50
+     */
+    private function applyCct(int $brightness, int $temp): void
+    {
+        $b = $this->clamp($brightness);
+        $t = $this->clamp($temp);
+        if ($t <= 50) {
+            $ww = $b;
+            $kw = (int) round($b * $t / 50);
+        } else {
+            $kw = $b;
+            $ww = (int) round($b * (100 - $t) / 50);
+        }
+        $this->SetWW($ww);
+        $this->SetKW($kw);
+        $this->SetValue('Helligkeit', $b);
+        $this->SetValue('Farbtemperatur', $t);
+    }
+
+    /**
+     * Derive the CCT variables from the current WW/KW values (inverse of applyCct).
+     * Keeps the last colour temperature while the light is off (B = 0).
+     */
+    private function recomputeCct(): void
+    {
+        $ww = (int) $this->GetValue('WW');
+        $kw = (int) $this->GetValue('KW');
+        $b = max($ww, $kw);
+        $this->SetValue('Helligkeit', $b);
+        if ($b > 0) {
+            $t = $ww >= $kw ? (int) round($kw / $ww * 50) : (int) round(100 - $ww / $kw * 50);
+            $this->SetValue('Farbtemperatur', $t);
+        }
+    }
+
+    /**
+     * Create/refresh the colour-temperature variable profile (idempotent).
+     */
+    private function ensureColorTempProfile(): void
+    {
+        if (!IPS_VariableProfileExists(self::CCT_PROFILE)) {
+            IPS_CreateVariableProfile(self::CCT_PROFILE, 1); // 1 = integer
+        }
+        IPS_SetVariableProfileValues(self::CCT_PROFILE, 0, 100, 1);
+        IPS_SetVariableProfileText(self::CCT_PROFILE, '', ' %');
+        IPS_SetVariableProfileDigits(self::CCT_PROFILE, 0);
+        IPS_SetVariableProfileIcon(self::CCT_PROFILE, 'Sun');
     }
 
     /**

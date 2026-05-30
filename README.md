@@ -101,9 +101,16 @@ EFW_StopDiscovery($InstanceID);
 EFW_AdoptDiscovered($InstanceID, $hexId);  // -> Melde-ID
 ```
 
+Variablen (alle bedienbar):
+- **Status** (An/Aus) – schaltet beim Einschalten auf die **zuletzt** bekannte
+  Helligkeit je Kanal zurück (nicht stur 100 %).
+- **Helligkeit** + **Farbtemperatur** (CCT-Komfort) – setzen WW/KW über ein
+  additives Mischmodell: `Helligkeit = max(WW,KW)`, Farbtemperatur `0 = warm`
+  (nur WW) … `100 = kalt` (nur KW). Verlustfreier Round-Trip mit WW/KW.
+- **Warmweiß** / **Kaltweiß** – die Kanäle weiterhin einzeln direkt regelbar;
+  Helligkeit/Farbtemperatur folgen automatisch.
+
 Komfort:
-- **Status (An/Aus)** schaltet beim Einschalten auf die **zuletzt** bekannte
-  Helligkeit je Kanal zurück (nicht stur auf 100 %).
 - **Rückmeldeadresse automatisch erkennen**: stößt den Aktor an und übernimmt
   die ID, von der er bestätigt (`DataByte0 = 0x0E`), automatisch ins Melde-ID-Feld.
 

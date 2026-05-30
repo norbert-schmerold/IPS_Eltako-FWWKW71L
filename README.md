@@ -33,7 +33,7 @@ den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
 
 1. In Symcon **Kern-Instanzen → Modules** (Module Control) öffnen.
 2. Repository hinzufügen:
-   `https://github.com/norbert-schmerold/Eltako-FWWKW71L`
+   `https://github.com/norbert-schmerold/IPS_Eltako-FWWKW71L`
 3. Neue Instanz anlegen: **Eltako FWWKW71L** (verbindet sich automatisch mit dem
    EnOcean-Gateway).
 

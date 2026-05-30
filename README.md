@@ -32,7 +32,9 @@ es gibt keinen Prozent-Befehl. **Eine** Geräte-ID (Sende-Offset), Kanal im Byte
 | `DataByte0` | `0x0F` (GFVS-Master) |
 
 - **Teach-In** (Profil 07-3F-7F): `DataByte3..0 = FF F8 0D 87`. Am Aktor den
-  mittleren Drehschalter auf **Position 8** stellen, dann *Einlernen*.
+  **oberen** Drehschalter auf die GFVS-Einlernfunktion **9** (hochauflösende
+  Dimmwerte) bzw. **10** (GFVS mit Bestätigungs-Telegramm) und den **mittleren**
+  auf **LRN** stellen, dann *Einlernen*.
 
 ### Empfang (Rückmeldung) – Format wird automatisch erkannt
 
@@ -87,8 +89,10 @@ Senden ist immer hochauflösend, das Empfangsformat wird automatisch erkannt:
 1. **Geräte-ID** setzen. Ersetzt du das Original-Modul, dieselbe Geräte-ID
    eintragen (z. B. `36`) – dann ist der Aktor schon eingelernt. Für ein neues
    Gerät *Freie Geräte-ID wählen* klicken.
-2. **Einlernen** (nur neues Gerät): am Aktor den mittleren **Drehschalter auf
-   Position 8** stellen, dann *Einlernen* klicken.
+2. **Einlernen** (nur neues Gerät): am Aktor den **oberen Drehschalter auf 9**
+   (GFVS hochauflösend) bzw. **10** (GFVS mit Bestätigung) und den **mittleren
+   auf LRN** stellen, dann *Einlernen* klicken. Danach mittleren zurück auf die
+   gewünschte Mindesthelligkeit (`%`).
 3. **Melde-ID** ermitteln: *Automatisch erkennen* klicken und **innerhalb von
    20 s den Aktor am Taster EIN und AUS schalten**. Das Modul liest die
    Kanal-Rückmeldung mit und trägt die WW-Adresse ein. (Alternativ *Suchen*,

@@ -214,9 +214,11 @@ class EltakoFWWKW71L extends IPSModule
 
     /**
      * Send the teach-in (LRN) telegram (free profile 07-3F-7F: FF F8 0D 87).
-     * Set the actor's middle rotary switch to position 8 ("GFVS mit
-     * hochauflösenden Dimmwerten einlernen") first; one teach-in covers both
-     * channels (the actor distinguishes WW/KW via DataByte1).
+     * On the actor, set the UPPER rotary switch to the GFVS teach function —
+     * position 9 ("GFVS/FFD mit hochauflösenden Dimmwerten") or 10 ("Drehtaster
+     * und GFVS", which also enables the confirmation telegram) — and the MIDDLE
+     * rotary to LRN, then press this. One teach-in covers both channels (the
+     * actor distinguishes WW/KW via DataByte1).
      */
     public function TeachIn(): void
     {

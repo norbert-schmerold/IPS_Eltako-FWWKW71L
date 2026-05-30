@@ -73,7 +73,7 @@
         },
         {
             "type": "Label",
-            "caption": "Einrichtung neues Gerät: Drehschalter (Mitte) des Aktors auf Position 8 stellen, dann Einlernen drücken. Danach Melde-ID automatisch erkennen."
+            "caption": "Einrichtung neues Gerät: oberen Drehschalter des Aktors auf 9 (GFVS hochauflösend) bzw. 10 (GFVS mit Bestätigung), mittleren auf LRN stellen, dann Einlernen drücken. Danach Melde-ID automatisch erkennen."
         },
         {
             "type": "RowLayout",

@@ -7,11 +7,10 @@ Das native Symcon-Modul ist defekt: es wertet die Bestätigungs-Telegramme des
 Aktors nicht aus (unabhängig von der eingetragenen ReturnID). Dieses Modul baut
 den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
 
-> **Status: Phase 1 (Hardware-Treiber).** Gateway-Anbindung und das Dimm-/
-> Rückmelde-Telegramm sind gegen einen Live-Mitschnitt des Original-Moduls
-> verifiziert (Senden, Status-Auswertung WW/KW, Rausch-Filterung). Einzig das
-> **Teach-In-Telegramm** ist noch `VERIFY@SETUP` und am echten Gerät zu
-> bestätigen (bei Ersatz eines eingelernten Geräts nicht nötig).
+> **Status: funktionsfähig.** Telegramm-Aufbau gegen die offizielle Eltako-Doku
+> („Inhalte der Eltako-Funktelegramme", freies Profil 07-3F-7F) **und** gegen
+> Live-Mitschnitte verifiziert: Senden, Status-Auswertung (beide
+> Rückmelde-Formate, automatisch erkannt), Teach-In, Rausch-Filterung.
 
 ## Architektur
 
@@ -19,30 +18,33 @@ den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
   EnOcean-Gateway (`ConnectParent`). Nachbau des nativen Moduls
   **„Eltako FWWKW71L (Hochauflösender WW/CW)"**.
 - Telegramme: **4BS, freies Profil 07-3F-7F**, RORG `0xA5` (= `Device: 165`).
-- **Zwei Telegramm-Formate** werden unterstützt (entspricht der PCT14-Einstellung
-  „Dimmwert in % senden ein/aus" des Aktors). Der **Empfang erkennt das Format
-  automatisch** und zeigt es im Formular an; das **Sende-Format** wählst du per
-  Property (anhand der Anzeige).
 
-  **Prozent** (DataByte2 direkt, zwei IDs):
+### Senden (Befehl an den Aktor) – immer hochauflösend
 
-  | Byte | Wert |
-  | --- | --- |
-  | `DataByte3` | `0x02` (Dimm-Marker) |
-  | `DataByte2` | Helligkeit `0…100 %` |
-  | `DataByte1` | `0x00` |
-  | `DataByte0` | `0x09` = ein, `0x08` = aus |
+Der FWWKW71L-Befehl ist laut Eltako-Profil 07-3F-7F **immer** hochauflösend –
+es gibt keinen Prozent-Befehl. **Eine** Geräte-ID (Sende-Offset), Kanal im Byte:
 
-  → Kanal über die **ID**: WW = Geräte-ID / Melde-ID, KW = **+1**.
+| Byte | Wert |
+| --- | --- |
+| `DataByte3` | obere 2 Bit des Werts |
+| `DataByte2` | untere 8 Bit → `Wert = DataByte3·256 + DataByte2`, `0…1023` (1023 = 100 %) |
+| `DataByte1` | Kanal: `0x10` = WW, `0x11` = KW (`0x02` = Status anfordern) |
+| `DataByte0` | `0x0F` (GFVS-Master) |
 
-  **Hochauflösend** (10-Bit, Kanal im Byte, eine ID):
+- **Teach-In** (Profil 07-3F-7F): `DataByte3..0 = FF F8 0D 87`. Am Aktor den
+  mittleren Drehschalter auf **Position 8** stellen, dann *Einlernen*.
 
-  | Byte | Wert |
-  | --- | --- |
-  | `DataByte3` | obere 2 Bit |
-  | `DataByte2` | untere 8 Bit → `Wert = DataByte3·256 + DataByte2`, `0…1023` (1023 = 100 %) |
-  | `DataByte1` | Kanal: `0x10` = WW, `0x11` = KW |
-  | `DataByte0` | `0x0F` = Befehl (Aktor antwortet mit `0x0E`) |
+### Empfang (Rückmeldung) – Format wird automatisch erkannt
+
+Je nach Aktor-Einstellung „Dimmwert in % senden" kommt die Bestätigung in einem
+von zwei Formaten – das Modul **erkennt beide automatisch** und zeigt das
+erkannte Format im Formular an:
+
+- **Hochauflösend**: `DataByte1` = Kanal (`0x10`/`0x11`), `DataByte0 = 0x0E`,
+  Wert 10-Bit in `DataByte3:DataByte2`. **Eine** Melde-ID.
+- **Prozent**: `DataByte3 = 0x02`, `DataByte2` = `0…100 %`, `DataByte0` =
+  `0x09`/`0x08`. Kanal über die **ID**: WW = Melde-ID (Base ID+1),
+  KW = Melde-ID + 1 (Base ID+2).
 
 Drei GUIDs mit unterschiedlichen Rollen (gemäß
 [Symcon-Datenfluss-Doku](https://www.symcon.de/de/service/dokumentation/entwicklerbereich/sdk-tools/sdk-php/datenfluss/)
@@ -70,31 +72,31 @@ GUIDs und Telegramm-Feldnamen (`Device`, `DeviceID`, `DestinationID`,
 
 ## Einrichtung
 
-1. **Geräte-ID** setzen: Wenn du das Original-Modul ersetzt, dieselbe Geräte-ID
-   eintragen (z. B. `22`) – dann ist der Aktor bereits eingelernt und ein
-   erneutes Teach-In entfällt. Für ein neues Gerät *Wähle verfügbare Geräte-ID*
-   klicken (kleinste freie, ab `100`, um mit bestehenden Eltako-Geräten
-   (Offsets 1–47) nicht zu kollidieren).
-2. **Teach-In** (nur bei neuem Gerät): Aktor in den Lernmodus versetzen, dann
-   *Einlernen* klicken. Ein Teach-In gilt für WW und KW.
-3. **Melde-ID** ermitteln:
-   - *Suchen (30 s)* starten und den Aktor mehrfach schalten.
-   - In der Liste die ID mit hohem Zähler auswählen und per Button als Melde-ID
-     übernehmen, danach speichern. (WW und KW melden über dieselbe Melde-ID.)
-   - Alternativ direkt eintragen (z. B. `FFF02404`).
-4. **Status emulieren**: optional aktivieren, wenn die Variablen sofort den
-   gesendeten Werten folgen sollen (statt erst auf die Rückmeldung zu warten).
-5. **Test** über die Buttons *Test EIN/AUS/50 %*.
+Pro physischem Aktor **eine** Instanz. Die Konfiguration ist bewusst minimal –
+Senden ist immer hochauflösend, das Empfangsformat wird automatisch erkannt:
 
-## Verifikation (`VERIFY@SETUP`)
+1. **Geräte-ID** setzen. Ersetzt du das Original-Modul, dieselbe Geräte-ID
+   eintragen (z. B. `36`) – dann ist der Aktor schon eingelernt. Für ein neues
+   Gerät *Freie Geräte-ID wählen* klicken.
+2. **Einlernen** (nur neues Gerät): am Aktor den mittleren **Drehschalter auf
+   Position 8** stellen, dann *Einlernen* klicken.
+3. **Melde-ID** ermitteln: *Automatisch erkennen* klicken (fragt den Aktor per
+   Status-Telegramm ab und übernimmt die Antwort-Adresse) – oder *Suchen* und
+   aus der Liste übernehmen. Danach **speichern**.
+4. Fertig. Das Formular zeigt das **erkannte Empfangsformat** (hochauflösend
+   oder Prozent). Steuern/Status laufen, auch bei Taster-Bedienung des Aktors.
 
-GUIDs, Feldnamen **und** das Dimm-/Rückmelde-Telegramm (`DataByte3=0x02`,
-`DataByte2`=Helligkeit, `DataByte0`=0x09/0x08) sind gegen einen Live-Mitschnitt
-des Original-Moduls verifiziert. **Offen** bleibt nur das **Teach-In-Telegramm**
-(`TEACH_DB3..0` in [`module.php`](EltakoFWWKW71L/module.php), aktuell der
-Standard-Eltako-4BS-Teach `E0 40 0D 80`): am echten Gerät ein Einlernen
-mitschneiden und bei Bedarf anpassen. Bei Ersatz eines bereits eingelernten
-Geräts (gleiche Geräte-ID) ist Teach-In ohnehin nicht nötig.
+Unter **Erweitert**: *Status emulieren* (Werte sofort aus gesendeten Befehlen
+setzen) und *Debug* (alle Telegramme ausgeben).
+
+## Verifikation
+
+GUIDs, Feldnamen und der komplette Telegramm-Aufbau (Befehl, beide
+Rückmelde-Formate, Teach-In `FF F8 0D 87`, Status-Anforderung `DataByte1=0x02`)
+sind gegen die offizielle Eltako-Doku **„Inhalte der Eltako-Funktelegramme"**
+(freies Profil 07-3F-7F) und gegen Live-Mitschnitte verifiziert. Eine
+Offline-Testsuite (gestubbtes `IPSModule`) prüft Encoding/Decoding beider
+Formate, CCT-Round-Trip, Teach-In und die Melde-ID-Erkennung.
 
 ## Public-API (für künftige Erweiterungs-Layer)
 

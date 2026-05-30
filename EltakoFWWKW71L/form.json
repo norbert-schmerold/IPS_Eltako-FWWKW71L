@@ -2,7 +2,7 @@
     "elements": [
         {
             "type": "Label",
-            "caption": "Eltako FWWKW71L – 2-Kanal-PWM-Dimmer (WW/KW). Ersatz-Treiber, der die Rückmeldungen des Aktors auswertet. Hängt als Child am EnOcean-Gateway."
+            "caption": "Eltako FWWKW71L – 2-Kanal-PWM-Dimmer (WW/KW). Ersatz-Treiber, der die Rückmeldungen des Aktors auswertet."
         },
         {
             "type": "RowLayout",
@@ -16,7 +16,7 @@
                 },
                 {
                     "type": "Button",
-                    "caption": "Wähle verfügbare Geräte-ID",
+                    "caption": "Freie Geräte-ID wählen",
                     "onClick": "EFW_PickFreeDeviceID($id);"
                 }
             ]
@@ -26,43 +26,40 @@
             "caption": "Sende-Adresse: {{SENDER}}"
         },
         {
-            "type": "Select",
-            "name": "SendFormat",
-            "caption": "Sende-Format",
-            "options": [
-                { "caption": "Prozent (DataByte2 = 0–100, WW=ID / KW=ID+1)", "value": "percent" },
-                { "caption": "Hochauflösend (10-Bit, Kanal in DataByte1, eine ID)", "value": "hires" }
+            "type": "RowLayout",
+            "items": [
+                {
+                    "type": "ValidationTextBox",
+                    "name": "MeldeID",
+                    "caption": "Melde-ID (hex)"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Automatisch erkennen",
+                    "onClick": "EFW_DetectMelde($id);"
+                }
             ]
         },
         {
             "type": "Label",
-            "name": "DetectedFormatLabel",
-            "caption": "Empfangenes Format (automatisch erkannt): {{DETECTED}}"
+            "name": "InfoLabel",
+            "caption": "{{INFO}}"
         },
         {
-            "type": "CheckBox",
-            "name": "EmulateStatus",
-            "caption": "Status emulieren (Werte sofort aus gesendeten Befehlen setzen)"
-        },
-        {
-            "type": "ValidationTextBox",
-            "name": "MeldeID",
-            "caption": "Melde-ID (hex). Prozent: WW-ID (KW = +1). Hochauflösend: eine ID (z. B. FFF02404)."
-        },
-        {
-            "type": "Button",
-            "caption": "Rückmeldeadresse automatisch erkennen",
-            "onClick": "EFW_DetectMelde($id);"
-        },
-        {
-            "type": "Label",
-            "name": "MeldeStatus",
-            "caption": "Empfang wird automatisch dekodiert (beide Formate). Geräte-ID muss gesetzt sein – der Aktor wird kurz angestoßen.   Aktuell: {{MELDE}}"
-        },
-        {
-            "type": "CheckBox",
-            "name": "DebugPromiscuous",
-            "caption": "Debug: ALLE eingehenden Telegramme ausgeben (Feldnamen prüfen)"
+            "type": "ExpansionPanel",
+            "caption": "Erweitert",
+            "items": [
+                {
+                    "type": "CheckBox",
+                    "name": "EmulateStatus",
+                    "caption": "Status emulieren (Werte sofort aus gesendeten Befehlen setzen)"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "DebugPromiscuous",
+                    "caption": "Debug: ALLE eingehenden Telegramme ausgeben"
+                }
+            ]
         }
     ],
     "actions": [
@@ -72,28 +69,24 @@
         },
         {
             "type": "Label",
-            "caption": "Drücken Sie Einlernen, nachdem Sie das Gerät in den Lernmodus versetzt haben (ein Teach-In für WW und KW)."
-        },
-        {
-            "type": "Button",
-            "caption": "Einlernen",
-            "onClick": "EFW_TeachIn($id);"
-        },
-        {
-            "type": "Label",
-            "caption": "Steuerung:"
+            "caption": "Einrichtung neues Gerät: Drehschalter (Mitte) des Aktors auf Position 8 stellen, dann Einlernen drücken. Danach Melde-ID automatisch erkennen."
         },
         {
             "type": "RowLayout",
             "items": [
                 {
                     "type": "Button",
-                    "caption": "Beide 100 %",
+                    "caption": "Einlernen",
+                    "onClick": "EFW_TeachIn($id);"
+                },
+                {
+                    "type": "Button",
+                    "caption": "100 %",
                     "onClick": "EFW_AllOn($id);"
                 },
                 {
                     "type": "Button",
-                    "caption": "Beide 50 %",
+                    "caption": "50 %",
                     "onClick": "EFW_SetBoth($id, 50, 50);"
                 },
                 {
@@ -105,7 +98,7 @@
         },
         {
             "type": "Label",
-            "caption": "Suchen: sammelt 30 s lang alle eingehenden 4BS-Sender-IDs. Schalten Sie den Aktor dabei mehrfach – die Melde-ID erscheint mit hohem Zähler. Dann unten übernehmen."
+            "caption": "Melde-ID manuell finden: Suchen starten und den Aktor schalten – die Melde-ID erscheint mit hohem Zähler, dann übernehmen."
         },
         {
             "type": "Button",

@@ -14,14 +14,19 @@ declare(strict_types=1);
  *     report from it, again distinguished by DataByte1.
  *   - ONE teach-in for both channels.
  *
- * Two telegram formats are supported (the actor's "Dimmwert in % senden" PCT14
- * setting), both verified against live sniffs; the receive side auto-detects:
- *   Percent : Device=165, DB3=0x02, DB2=0..100, DB0=0x09/0x08; channel per ID
- *             (WW=Melde-ID, KW=Melde-ID+1; send WW=offset, KW=offset+1).
- *   Hi-res  : Device=165, value = (DB3<<8)|DB2 (0..1023), DB1=channel
- *             (0x10=WW, 0x11=KW), DB0=0x0F (actor confirms 0x0E); single ID.
- * The send format is chosen via the SendFormat property; the detected receive
- * format is shown in the form.
+ * Verified against the official Eltako telegram documentation (free profile
+ * 07-3F-7F) and live sniffs.
+ *
+ * SEND (command) is always high-resolution: Device=165, value = (DB3<<8)|DB2
+ * (0..1023), DB1 = channel (0x10=WW, 0x11=KW), DB0 = 0x0F (GFVS master); one
+ * sender offset. Teach-in DB3..0 = FF F8 0D 87. DB1 = 0x02 requests a status
+ * confirmation without changing the output.
+ *
+ * RECEIVE (confirmation) auto-detects either format (per the actor's "Dimmwert
+ * in % senden" setting), and the detected format is shown in the form:
+ *   Hi-res  : DB1 = channel, DB0 = 0x0E, value 10-bit in DB3:DB2; one Melde-ID.
+ *   Percent : DB3 = 0x02, DB2 = 0..100 %, DB0 = 0x09/0x08; channel per ID
+ *             (WW = Melde-ID = Base ID+1, KW = Melde-ID+1 = Base ID+2).
  */
 class EltakoFWWKW71L extends IPSModule
 {
@@ -62,13 +67,17 @@ class EltakoFWWKW71L extends IPSModule
     private const DB0_CMD = 0x0F;
 
     /**
-     * 4BS teach-in telegram (standard Eltako variable teach for dim actors).
-     * VERIFY@SETUP: confirm against a real FWWKW71L teach-in sniff.
+     * Teach-in (LRN) telegram for the free profile 07-3F-7F, per the official
+     * Eltako telegram documentation ("Inhalte der Eltako-Funktelegramme"):
+     * Lerntelegramm DB3..DB0 = 0xFF, 0xF8, 0x0D, 0x87.
      */
-    private const TEACH_DB3 = 0xE0;
-    private const TEACH_DB2 = 0x40;
+    private const TEACH_DB3 = 0xFF;
+    private const TEACH_DB2 = 0xF8;
     private const TEACH_DB1 = 0x0D;
-    private const TEACH_DB0 = 0x80;
+    private const TEACH_DB0 = 0x87;
+
+    /** DataByte1 = 0x02 requests a confirmation telegram without changing state. */
+    private const DB1_STATUS_REQUEST = 0x02;
 
     /** Auto-assigned "Wähle freie Geräte-ID" starts here (existing Eltako 1-47). */
     private const SENDER_OFFSET_BASE = 100;
@@ -91,8 +100,6 @@ class EltakoFWWKW71L extends IPSModule
         // --- Properties (mirror the native module's single-ID form) ---
         $this->RegisterPropertyInteger('DeviceID', 0);     // Geräte-ID (sender offset)
         $this->RegisterPropertyString('MeldeID', '');      // bidi feedback base ID (hex)
-        // Send telegram format (matches the actor's "Dimmwert in % senden" setting).
-        $this->RegisterPropertyString('SendFormat', self::FORMAT_PERCENT);
         $this->RegisterPropertyBoolean('EmulateStatus', false);
         $this->RegisterPropertyBoolean('DebugPromiscuous', false);
 
@@ -203,8 +210,10 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Send the teach-in (LRN) telegram. ONE teach-in covers both channels: the
-     * actor learns the base sender ID and maps WW=offset, KW=offset+1 itself.
+     * Send the teach-in (LRN) telegram (free profile 07-3F-7F: FF F8 0D 87).
+     * Set the actor's middle rotary switch to position 8 ("GFVS mit
+     * hochauflösenden Dimmwerten einlernen") first; one teach-in covers both
+     * channels (the actor distinguishes WW/KW via DataByte1).
      */
     public function TeachIn(): void
     {
@@ -257,6 +266,8 @@ class EltakoFWWKW71L extends IPSModule
         $this->UpdateFormField('DiscoveryList', 'values', json_encode([]));
         $this->SetTimerInterval('DiscoveryStop', self::DISCOVERY_WINDOW * 1000);
         $this->SendDebug('Discovery', 'started (' . self::DISCOVERY_WINDOW . 's)', 0);
+        // Provoke a confirmation so the actor's Melde-ID shows up in the list.
+        $this->sendStatusRequest();
     }
 
     /**
@@ -289,22 +300,22 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Auto-detect the Melde-ID: nudge the actor (re-send the current WW value) and
-     * capture the address it confirms from. The result is written into the form's
-     * Melde-ID field; the user still has to save.
+     * Auto-detect the Melde-ID: ask the actor for its state (status request,
+     * which does not change the output) and capture the address it confirms
+     * from. The result is written into the form's Melde-ID field; the user still
+     * has to save.
      */
     public function DetectMelde(): void
     {
         if ($this->ReadPropertyInteger('DeviceID') <= 0) {
-            $this->UpdateFormField('MeldeStatus', 'caption', $this->Translate('Bitte zuerst die Geräte-ID setzen.'));
+            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Bitte zuerst die Geräte-ID setzen.'));
             return;
         }
         $this->WriteAttributeBoolean('DetectActive', true);
         $this->SetTimerInterval('DetectStop', 6000);
-        $this->UpdateFormField('MeldeStatus', 'caption', $this->Translate('Erkennung läuft … (Aktor wird angestoßen)'));
+        $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Erkennung läuft … (Status wird abgefragt)'));
         $this->SendDebug('DetectMelde', 'started', 0);
-        // Re-send the current WW value so the actor confirms without changing state.
-        $this->setChannel('WW', $this->clamp((int) $this->GetValue('WW')));
+        $this->sendStatusRequest();
     }
 
     /**
@@ -428,15 +439,10 @@ class EltakoFWWKW71L extends IPSModule
         $baseStr = $base === null ? $this->Translate('unknown') : sprintf('0x%08X', $base);
         $senderStr = ($base === null || $offset <= 0) ? '—' : sprintf('0x%08X', $base + $offset);
 
-        $melde = $this->meldeIdValue();
-        $meldeStr = $melde === 0 ? '—' : sprintf('%08X', $melde);
-
-        $detected = $this->formatLabel($this->ReadAttributeString('DetectedFormat'));
-
         $json = json_encode($form);
         $json = str_replace(
-            ['{{BASEID}}', '{{SENDER}}', '{{MELDE}}', '{{DETECTED}}'],
-            [$baseStr, $senderStr, $meldeStr, $detected],
+            ['{{BASEID}}', '{{SENDER}}', '{{INFO}}'],
+            [$baseStr, $senderStr, $this->infoCaption()],
             $json
         );
 
@@ -470,12 +476,24 @@ class EltakoFWWKW71L extends IPSModule
     private function formatLabel(string $format): string
     {
         if ($format === self::FORMAT_HIRES) {
-            return $this->Translate('Hochauflösend (10-Bit, Kanal in DataByte1, eine Melde-ID)');
+            return $this->Translate('hochauflösend');
         }
         if ($format === self::FORMAT_PERCENT) {
-            return $this->Translate('Prozent (DataByte2 = 0–100, zwei Melde-IDs)');
+            return $this->Translate('Prozent');
         }
         return $this->Translate('noch nichts empfangen');
+    }
+
+    /** Combined status line for the form (Melde-ID + detected receive format). */
+    private function infoCaption(): string
+    {
+        $melde = $this->meldeIdValue();
+        $meldeStr = $melde === 0 ? '—' : sprintf('%08X', $melde);
+        return sprintf(
+            $this->Translate('Melde-ID: %s   ·   empfangenes Format: %s   (Empfang wird automatisch erkannt)'),
+            $meldeStr,
+            $this->formatLabel($this->ReadAttributeString('DetectedFormat'))
+        );
     }
 
     /** Remember the auto-detected receive format and reflect it in the form. */
@@ -485,7 +503,7 @@ class EltakoFWWKW71L extends IPSModule
             return;
         }
         $this->WriteAttributeString('DetectedFormat', $format);
-        $this->UpdateFormField('DetectedFormatLabel', 'caption', $this->Translate('Empfangenes Format: ') . $this->formatLabel($format));
+        $this->UpdateFormField('InfoLabel', 'caption', $this->infoCaption());
         $this->SendDebug('Format', 'detected ' . $format, 0);
     }
 
@@ -518,7 +536,7 @@ class EltakoFWWKW71L extends IPSModule
         $hex = strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT));
         $this->StopDetectMelde();
         $this->UpdateFormField('MeldeID', 'value', $hex);
-        $this->UpdateFormField('MeldeStatus', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
+        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
         $this->SendDebug('DetectMelde', 'detected ' . $hex, 0);
         return true;
     }
@@ -532,11 +550,13 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Send a dim command for one channel (in the configured send format) and
-     * optionally reflect the value immediately (status emulation).
+     * Send a dim command for one channel and optionally reflect the value
+     * immediately (status emulation).
      *
-     * Hi-res: both channels use the same offset, channel in DataByte1, 10-bit value.
-     * Percent: WW = offset, KW = offset + 1, value in DataByte2, on/off in DataByte0.
+     * The FWWKW71L command (free profile 07-3F-7F) is always high-resolution:
+     * 10-bit value in DataByte3:DataByte2, channel in DataByte1 (0x10 = WW,
+     * 0x11 = KW), DataByte0 = 0x0F (GFVS master). The percentage form only ever
+     * appears in the actor's *confirmation*, never in the command.
      */
     private function setChannel(string $channel, int $value): void
     {
@@ -548,20 +568,12 @@ class EltakoFWWKW71L extends IPSModule
         }
         $this->rememberLast($channel, $value);
 
-        if ($this->ReadPropertyString('SendFormat') === self::FORMAT_HIRES) {
-            $raw = (int) round($value * self::VALUE_MAX / 100);
-            $db3 = ($raw >> 8) & 0xFF;   // high 2 bits
-            $db2 = $raw & 0xFF;          // low byte
-            $db1 = $this->channelByte($channel);
-            $this->SendDebug('TX ' . $channel, sprintf('hires offset=%d pct=%d raw=%d', $offset, $value, $raw), 0);
-            $this->sendTelegram($offset, $db3, $db2, $db1, self::DB0_CMD);
-        } else {
-            // Percentage: WW = offset, KW = offset + 1.
-            $choff = $channel === 'KW' ? $offset + 1 : $offset;
-            $db0 = $value > 0 ? self::DB0_ON : self::DB0_OFF;
-            $this->SendDebug('TX ' . $channel, sprintf('percent offset=%d level=%d db0=0x%02X', $choff, $value, $db0), 0);
-            $this->sendTelegram($choff, self::DB3_DIM, $value, 0x00, $db0);
-        }
+        $raw = (int) round($value * self::VALUE_MAX / 100);
+        $db3 = ($raw >> 8) & 0xFF;   // high 2 bits
+        $db2 = $raw & 0xFF;          // low byte
+        $db1 = $this->channelByte($channel);
+        $this->SendDebug('TX ' . $channel, sprintf('offset=%d pct=%d raw=%d', $offset, $value, $raw), 0);
+        $this->sendTelegram($offset, $db3, $db2, $db1, self::DB0_CMD);
 
         // Status emulation: reflect the command immediately when bidi feedback
         // is not trusted/available; otherwise the variable follows the actor.
@@ -569,6 +581,21 @@ class EltakoFWWKW71L extends IPSModule
             $this->SetValue($channel, $value);
             $this->recomputeStatus();
         }
+    }
+
+    /**
+     * Ask the actor for its current state (DataByte1 = 0x02, "Bestätigungs-
+     * telegramm anfordern"). The actor confirms without changing its output —
+     * used for Melde-ID detection and for an initial sync.
+     */
+    private function sendStatusRequest(): void
+    {
+        $offset = $this->ReadPropertyInteger('DeviceID');
+        if ($offset <= 0) {
+            return;
+        }
+        $this->SendDebug('TX status request', 'offset=' . $offset, 0);
+        $this->sendTelegram($offset, 0x00, 0x00, self::DB1_STATUS_REQUEST, self::DB0_CMD);
     }
 
     /**

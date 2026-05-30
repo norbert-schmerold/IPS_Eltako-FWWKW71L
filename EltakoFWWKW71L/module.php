@@ -305,9 +305,11 @@ class EltakoFWWKW71L extends IPSModule
 
     /**
      * Auto-detect the Melde-ID: ask the actor for its state (status request,
-     * which does not change the output) and capture the address it confirms
-     * from. The result is written into the form's Melde-ID field; the user still
-     * has to save.
+     * which does not change the output) and collect the addresses it confirms
+     * from. The actor sends several (warmweiß = Base ID+1, kaltweiß = +2, alle
+     * Kanäle = +3, Master = +4); the lowest is the warm-white channel and the
+     * correct Melde-ID. It is written into the form field on the timer stop;
+     * the user still has to save.
      */
     public function DetectMelde(): void
     {
@@ -315,22 +317,37 @@ class EltakoFWWKW71L extends IPSModule
             $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Bitte zuerst die Geräte-ID setzen.'));
             return;
         }
+        $this->SetBuffer('DetectCandidates', json_encode([]));
         $this->WriteAttributeBoolean('DetectActive', true);
-        $this->SetTimerInterval('DetectStop', 6000);
+        $this->SetTimerInterval('DetectStop', 4000);
         $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Erkennung läuft … (Status wird abgefragt)'));
         $this->SendDebug('DetectMelde', 'started', 0);
         $this->sendStatusRequest();
     }
 
     /**
-     * Stop the Melde-ID auto-detection (also called by the timer on timeout).
+     * Finish Melde-ID detection (called by the timer): pick the lowest collected
+     * confirmation address (= warm-white channel, Base ID+1) and write it in.
      */
     public function StopDetectMelde(): void
     {
-        if ($this->ReadAttributeBoolean('DetectActive')) {
-            $this->WriteAttributeBoolean('DetectActive', false);
+        if (!$this->ReadAttributeBoolean('DetectActive')) {
+            $this->SetTimerInterval('DetectStop', 0);
+            return;
         }
+        $this->WriteAttributeBoolean('DetectActive', false);
         $this->SetTimerInterval('DetectStop', 0);
+
+        $list = json_decode($this->GetBuffer('DetectCandidates'), true);
+        if (!is_array($list) || count($list) === 0) {
+            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Keine Rückmeldung erkannt. Aktor schalten und erneut versuchen, oder Melde-ID manuell eintragen.'));
+            return;
+        }
+        sort($list);
+        $hex = strtoupper(str_pad(dechex($list[0]), 8, '0', STR_PAD_LEFT));
+        $this->UpdateFormField('MeldeID', 'value', $hex);
+        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
+        $this->SendDebug('DetectMelde', 'picked ' . $hex . ' from ' . count($list) . ' candidate(s)', 0);
     }
 
     // =====================================================================
@@ -395,9 +412,9 @@ class EltakoFWWKW71L extends IPSModule
         // Discovery sees every 4BS telegram so the Melde-ID can be identified.
         $this->maybeRecordDiscovery($sender, $data);
 
-        // Melde-ID auto-detection (button): capture the address the actor confirms from.
-        if ($this->ReadAttributeBoolean('DetectActive') && $this->captureMeldeId($sender, $data)) {
-            return '';
+        // Melde-ID auto-detection (button): collect candidate confirmation addresses.
+        if ($this->ReadAttributeBoolean('DetectActive')) {
+            $this->recordDetectCandidate($sender, $data);
         }
 
         $melde = $this->meldeIdValue();
@@ -513,37 +530,38 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * During Melde-ID detection, capture the address the actor confirms from.
-     * Excludes our own send echo (BaseID + offset) and accepts both formats:
-     * hi-res confirm (channel byte + DataByte0 = 0x0E) or a percentage dim
-     * telegram (DataByte3 = 0x02, LRN data bit set).
+     * During Melde-ID detection, collect every address the actor confirms from.
+     * Excludes our own send echo (BaseID + offset) and accepts both confirmation
+     * formats: hi-res (channel byte + DataByte0 = 0x0E) or percent (DataByte3 =
+     * 0x02 + DataByte0 = 0x09/0x08). StopDetectMelde() then picks the lowest
+     * address (= warm-white channel, Base ID+1).
      */
-    private function captureMeldeId(int $sender, array $data): bool
+    private function recordDetectCandidate(int $sender, array $data): void
     {
         $base = $this->getBaseID();
         $offset = $this->ReadPropertyInteger('DeviceID');
-        if ($base !== null && $offset > 0 && ($sender === $base + $offset || $sender === $base + $offset + 1)) {
-            return false; // our own echo
+        if ($base !== null && $offset > 0 && $sender === $base + $offset) {
+            return; // our own echo
         }
 
         $db1 = (int) ($data['DataByte1'] ?? -1);
         $db0 = (int) ($data['DataByte0'] ?? -1);
         $db3 = (int) ($data['DataByte3'] ?? -1);
-        // Actor confirmations: hi-res uses DataByte0 = 0x0E, percent uses 0x09/0x08.
-        // Our own send echo uses 0x0F (hi-res) — must NOT be mistaken for percent,
-        // hence the exact 0x09/0x08 match (not just "bit 3 set", which 0x0F also has).
         $isHires = ($db1 === self::DB1_WW || $db1 === self::DB1_KW) && $db0 === 0x0E;
         $isPercent = $db3 === self::DB3_DIM && ($db0 === self::DB0_ON || $db0 === self::DB0_OFF);
         if (!$isHires && !$isPercent) {
-            return false;
+            return;
         }
 
-        $hex = strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT));
-        $this->StopDetectMelde();
-        $this->UpdateFormField('MeldeID', 'value', $hex);
-        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
-        $this->SendDebug('DetectMelde', 'detected ' . $hex, 0);
-        return true;
+        $list = json_decode($this->GetBuffer('DetectCandidates'), true);
+        if (!is_array($list)) {
+            $list = [];
+        }
+        if (!in_array($sender, $list, true)) {
+            $list[] = $sender;
+            $this->SetBuffer('DetectCandidates', json_encode($list));
+            $this->SendDebug('DetectMelde', 'candidate ' . strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT)), 0);
+        }
     }
 
     /** Remember a channel's last non-zero brightness (for the Status-on restore). */

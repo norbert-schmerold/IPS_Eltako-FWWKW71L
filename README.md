@@ -43,8 +43,11 @@ erkannte Format im Formular an:
 - **Hochauflösend**: `DataByte1` = Kanal (`0x10`/`0x11`), `DataByte0 = 0x0E`,
   Wert 10-Bit in `DataByte3:DataByte2`. **Eine** Melde-ID.
 - **Prozent**: `DataByte3 = 0x02`, `DataByte2` = `0…100 %`, `DataByte0` =
-  `0x09`/`0x08`. Kanal über die **ID**: WW = Melde-ID (Base ID+1),
-  KW = Melde-ID + 1 (Base ID+2).
+  `0x09`/`0x08`. Kanal über die **ID** – der Aktor sendet ab seiner Base-ID:
+  WW = **Base ID+1** (= Melde-ID), KW = Base ID+2 (= Melde-ID + 1),
+  „Alle Kanäle" = Base ID+3, **Master-Telegramm = Base ID+4**. Als Melde-ID
+  zählt die **WW-Adresse (Base ID+1)** – die *niedrigste*; *Automatisch erkennen*
+  nimmt automatisch die niedrigste. Master/Alle-Kanäle nicht eintragen.
 
 Drei GUIDs mit unterschiedlichen Rollen (gemäß
 [Symcon-Datenfluss-Doku](https://www.symcon.de/de/service/dokumentation/entwicklerbereich/sdk-tools/sdk-php/datenfluss/)

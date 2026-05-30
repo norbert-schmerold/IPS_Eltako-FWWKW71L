@@ -91,8 +91,6 @@ class EltakoFWWKW71L extends IPSModule
     private const KELVIN_WARM = 2700;
     private const KELVIN_COLD = 6500;
 
-    private const CHANNELS = ['WW', 'KW'];
-
     public function Create()
     {
         parent::Create();

@@ -5,42 +5,51 @@ declare(strict_types=1);
 /**
  * Eltako FWWKW71L – 2-channel PWM dimmer (WW/KW) for LED 12-36V DC.
  *
- * Phase 1: minimal hardware driver. Sends 4BS PWM commands to the actor via the
- * EnOcean gateway and evaluates the actor's confirmation telegrams (the native
- * module fails to do this).
+ * Replacement driver for the native Symcon module, which fails to evaluate the
+ * actor's confirmation telegrams. Mirrors the native module's single-ID layout:
  *
- * Lines marked `VERIFY@SETUP` carry assumptions about the gateway's JSON field
- * names / telegram bytes that MUST be confirmed against a live sniff before they
- * are relied upon. Use the `DebugPromiscuous` property to dump raw RX telegrams.
+ *   - ONE "Geräte-ID" (sender offset on the gateway BaseID). Channel WW uses the
+ *     offset, KW uses offset + 1.
+ *   - ONE "Melde-ID" (the actor's bidirectional feedback address). WW reports
+ *     from the Melde-ID, KW from Melde-ID + 1.
+ *   - ONE teach-in for both channels.
+ *
+ * Telegram format verified against a live sniff of the native module
+ * (EEP 07-3F-7F, 4BS): Device=165, DataLength=4,
+ *   DataByte3 = 0x02 (dim telegram)
+ *   DataByte2 = level 0..100 (%)
+ *   DataByte1 = 0x00 (internal dim speed)
+ *   DataByte0 = 0x09 (on) / 0x08 (off)   [bit0 = on/off, bit3 = LRN data bit]
  */
 class EltakoFWWKW71L extends IPSModule
 {
     /**
-     * MODULE GUID of the native EnOcean Gateway/Configurator. ConnectParent
-     * uses this to auto-create/attach the parent gateway instance. This is a
-     * module id, NOT a data interface — distinct from TX_DATAID below.
-     * Verified against the native EnOcean device modules
-     * (nefiertsrebliS/MoreEnoceanFeatures: ConnectParent("{A52FEFE9-...}")).
+     * MODULE GUID of the native EnOcean Gateway/Configurator (for ConnectParent).
+     * This is a module id, NOT a data interface — see Symcon ConnectParent docs.
      */
     private const GATEWAY_MODULE_GUID = '{A52FEFE9-7858-4B8E-A96E-26E15CB944F7}';
-    /**
-     * Data INTERFACE GUID for the gateway <-> device link. Used as the payload
-     * DataID when sending, and declared as the module's parentRequirements in
-     * module.json. Distinct from the gateway's module GUID above.
-     */
+    /** Data INTERFACE GUID gateway <-> device: payload DataID + parentRequirements. */
     private const TX_DATAID = '{70E3075F-A35D-4DEB-AC20-C929A156FE48}';
 
     /** RORG 4BS (0xA5). */
     private const RORG_4BS = 165;
-    /** DB3 marker for the free-profile data telegram (07-3F-7F). VERIFY@SETUP. */
-    private const DB3_DATA = 0x02;
-    /** DB0 of an outgoing data telegram (LRN bit set => data, status flag on). VERIFY@SETUP. */
-    private const DB0_DATA = 0x09;
+    /** DataByte3 of a dim data/feedback telegram (verified). */
+    private const DB3_DIM = 0x02;
+    /** DataByte0 flags: bit3 = LRN data bit, bit0 = on/off (verified). */
+    private const DB0_ON = 0x09;
+    private const DB0_OFF = 0x08;
 
-    /** Auto-assigned sender offsets start here (existing Eltako devices use 1-47). */
+    /**
+     * 4BS teach-in telegram (standard Eltako variable teach for dim actors).
+     * VERIFY@SETUP: confirm against a real FWWKW71L teach-in sniff.
+     */
+    private const TEACH_DB3 = 0xE0;
+    private const TEACH_DB2 = 0x40;
+    private const TEACH_DB1 = 0x0D;
+    private const TEACH_DB0 = 0x80;
+
+    /** Auto-assigned "Wähle freie Geräte-ID" starts here (existing Eltako 1-47). */
     private const SENDER_OFFSET_BASE = 100;
-    /** Bidi feedback is considered fresh for this many seconds. */
-    private const BIDI_TIMEOUT = 60;
     /** Discovery collection window in seconds. */
     private const DISCOVERY_WINDOW = 30;
 
@@ -50,33 +59,25 @@ class EltakoFWWKW71L extends IPSModule
     {
         parent::Create();
 
-        // --- Properties ---
-        $this->RegisterPropertyString('ReturnID_WW', '');
-        $this->RegisterPropertyString('ReturnID_KW', '');
-        $this->RegisterPropertyInteger('SenderOffset_WW', 0);
-        $this->RegisterPropertyInteger('SenderOffset_KW', 0);
+        // --- Properties (mirror the native module's single-ID form) ---
+        $this->RegisterPropertyInteger('DeviceID', 0);     // Geräte-ID (sender offset)
+        $this->RegisterPropertyString('MeldeID', '');      // bidi feedback base ID (hex)
+        $this->RegisterPropertyBoolean('EmulateStatus', false);
         $this->RegisterPropertyBoolean('DebugPromiscuous', false);
 
-        // --- Attributes (effective, auto-assigned sender offsets / runtime state) ---
-        $this->RegisterAttributeInteger('EffectiveOffset_WW', 0);
-        $this->RegisterAttributeInteger('EffectiveOffset_KW', 0);
+        // --- Runtime state ---
         $this->RegisterAttributeBoolean('DiscoveryActive', false);
 
         // --- Variables ---
-        $this->RegisterVariableInteger('WW', 'Warm White', '~Intensity.100', 10);
-        $this->RegisterVariableInteger('KW', 'Cold White', '~Intensity.100', 20);
-        $this->RegisterVariableInteger('WW_Actual', 'Warm White (actual)', '~Intensity.100', 11);
-        $this->RegisterVariableInteger('KW_Actual', 'Cold White (actual)', '~Intensity.100', 21);
+        $this->RegisterVariableInteger('WW', 'Warmweiß', '~Intensity.100', 10);
+        $this->RegisterVariableInteger('KW', 'Kaltweiß', '~Intensity.100', 20);
         $this->RegisterVariableBoolean('Status', 'Status', '~Switch', 30);
-        $this->RegisterVariableInteger('LastFeedback', 'Last feedback', '~UnixTimestamp', 40);
-        $this->RegisterVariableBoolean('BidiStatus', 'Bidi OK', '~Switch', 50);
 
         $this->EnableAction('WW');
         $this->EnableAction('KW');
         $this->EnableAction('Status');
 
         // --- Timers ---
-        $this->RegisterTimer('BidiCheck', 0, 'EFW_CheckBidi($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DiscoveryStop', 0, 'EFW_StopDiscovery($_IPS[\'TARGET\']);');
 
         $this->SetBuffer('Discovery', json_encode([]));
@@ -94,57 +95,41 @@ class EltakoFWWKW71L extends IPSModule
         parent::ApplyChanges();
 
         $this->ConnectParent(self::GATEWAY_MODULE_GUID);
-        $this->autoAssignOffsets();
 
-        // Receive filter: in promiscuous mode receive everything, otherwise only 4BS.
+        // Receive filter: promiscuous = everything, otherwise only 4BS (Device=165).
         if ($this->ReadPropertyBoolean('DebugPromiscuous')) {
             $this->SetReceiveDataFilter('.*');
         } else {
-            // "Device" = RORG; 165 (0xA5) = 4BS. Field name verified against the
-            // native EnOcean device modules. Pass all 4BS, match sender in ReceiveData.
             $this->SetReceiveDataFilter('.*"Device":' . self::RORG_4BS . '.*');
         }
-
-        $this->SetTimerInterval('BidiCheck', self::BIDI_TIMEOUT * 1000);
-        $this->CheckBidi();
     }
 
     // =====================================================================
-    // Public API (prefix EFW_) — kept typed and side-effect-clean so future
-    // layers (CCT, scenes, memory, astro, watchdog) can sit on top.
+    // Public API (prefix EFW_)
     // =====================================================================
 
     /**
-     * Set the warm-white channel.
+     * Set the warm-white channel (sender offset = Geräte-ID).
      *
      * @param int $value PWM percentage, clamped to 0-100.
      */
     public function SetWW(int $value): void
     {
-        $value = $this->clamp($value);
-        $this->sendPWM($this->effectiveOffset('WW'), $value);
-        $this->SetValue('WW', $value);
-        $this->recomputeStatus();
+        $this->setChannel('WW', $value);
     }
 
     /**
-     * Set the cold-white channel.
+     * Set the cold-white channel (sender offset = Geräte-ID + 1).
      *
      * @param int $value PWM percentage, clamped to 0-100.
      */
     public function SetKW(int $value): void
     {
-        $value = $this->clamp($value);
-        $this->sendPWM($this->effectiveOffset('KW'), $value);
-        $this->SetValue('KW', $value);
-        $this->recomputeStatus();
+        $this->setChannel('KW', $value);
     }
 
     /**
      * Set both channels in one call.
-     *
-     * @param int $ww Warm-white PWM percentage (0-100).
-     * @param int $kw Cold-white PWM percentage (0-100).
      */
     public function SetBoth(int $ww, int $kw): void
     {
@@ -161,39 +146,52 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Send a 4BS teach-in (LRN) telegram for the given channel's sender ID.
-     *
-     * VERIFY@SETUP: the LRN byte layout below is the standard 4BS variable
-     * teach-in for the free profile 07-3F-7F and must be confirmed by sniffing
-     * a manual teach-in on the actor before being trusted.
-     *
-     * @param string $channel 'WW' or 'KW'.
+     * Send the teach-in (LRN) telegram. ONE teach-in covers both channels: the
+     * actor learns the base sender ID and maps WW=offset, KW=offset+1 itself.
      */
-    public function TeachIn(string $channel): void
+    public function TeachIn(): void
     {
-        $channel = $this->requireChannel($channel);
-        $offset = $this->effectiveOffset($channel);
-
-        // Free profile 07-3F-7F => FUNC=0x07, TYPE=0x3F, MANUF=0x7F.
-        $func = 0x07;
-        $type = 0x3F;
-        $manuf = 0x7F;
-        $db3 = (($func << 2) | ($type >> 5)) & 0xFF;
-        $db2 = (($type << 3) | ($manuf >> 8)) & 0xFF;
-        $db1 = $manuf & 0xFF;
-        $db0 = 0x80; // LRN type "with EEP+MANUF"; LRN bit (bit3)=0 => teach-in.
-
+        $offset = $this->ReadPropertyInteger('DeviceID');
+        if ($offset <= 0) {
+            echo $this->Translate('Please set a Geräte-ID first.');
+            return;
+        }
         $this->SendDebug(
-            'TX TeachIn ' . $channel,
-            sprintf('offset=%d DB3..0=%02X %02X %02X %02X', $offset, $db3, $db2, $db1, $db0),
+            'TX TeachIn',
+            sprintf('offset=%d DB3..0=%02X %02X %02X %02X', $offset, self::TEACH_DB3, self::TEACH_DB2, self::TEACH_DB1, self::TEACH_DB0),
             0
         );
-        $this->sendTelegram($offset, $db3, $db2, $db1, $db0);
+        $this->sendTelegram($offset, self::TEACH_DB3, self::TEACH_DB2, self::TEACH_DB1, self::TEACH_DB0);
+    }
+
+    /**
+     * Pick the smallest free Geräte-ID (base + base+1 unused by other instances
+     * of this module) and write it into the form field.
+     */
+    public function PickFreeDeviceID(): void
+    {
+        $used = [];
+        foreach (IPS_GetInstanceListByModuleID(self::moduleId()) as $iid) {
+            if ($iid === $this->InstanceID) {
+                continue;
+            }
+            $d = (int) IPS_GetProperty($iid, 'DeviceID');
+            if ($d > 0) {
+                $used[$d] = true;
+                $used[$d + 1] = true;
+            }
+        }
+        $n = self::SENDER_OFFSET_BASE;
+        while (isset($used[$n]) || isset($used[$n + 1])) {
+            $n += 2;
+        }
+        $this->UpdateFormField('DeviceID', 'value', $n);
     }
 
     /**
      * Start a discovery window: collect every incoming 4BS sender ID for
-     * DISCOVERY_WINDOW seconds and surface them in the configuration form.
+     * DISCOVERY_WINDOW seconds. Toggle the actor a few times so its Melde-ID
+     * shows up with a high response count.
      */
     public function StartDiscovery(): void
     {
@@ -215,45 +213,14 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Copy a discovered sender ID into the ReturnID field of a channel.
-     * The user still has to save the configuration to persist it.
+     * Copy a discovered sender ID into the Melde-ID field. The user still has to
+     * save the configuration to persist it.
      *
-     * @param string $channel 'WW' or 'KW'.
-     * @param string $hexId   Sender ID as uppercase hex string.
+     * @param string $hexId Sender ID as uppercase hex string.
      */
-    public function AdoptDiscovered(string $channel, string $hexId): void
+    public function AdoptDiscovered(string $hexId): void
     {
-        $channel = $this->requireChannel($channel);
-        $this->UpdateFormField('ReturnID_' . $channel, 'value', strtoupper(trim($hexId)));
-    }
-
-    /**
-     * Run a manual test ramp on one channel (0->100->0). Blocking; intended
-     * only for the configuration-form test buttons.
-     *
-     * @param string $channel 'WW' or 'KW'.
-     */
-    public function TestRamp(string $channel): void
-    {
-        $channel = $this->requireChannel($channel);
-        $offset = $this->effectiveOffset($channel);
-        $this->SendDebug('TestRamp ' . $channel, 'start', 0);
-        foreach ([0, 25, 50, 75, 100, 75, 50, 25, 0] as $step) {
-            $this->sendPWM($offset, $step);
-            IPS_Sleep(400);
-        }
-        $this->SetValue($channel, 0);
-        $this->recomputeStatus();
-    }
-
-    /**
-     * Re-evaluate the freshness of the last bidi feedback. Timer target.
-     */
-    public function CheckBidi(): void
-    {
-        $last = (int) $this->GetValue('LastFeedback');
-        $ok = $last > 0 && (time() - $last) < self::BIDI_TIMEOUT;
-        $this->SetValue('BidiStatus', $ok);
+        $this->UpdateFormField('MeldeID', 'value', strtoupper(trim($hexId)));
     }
 
     // =====================================================================
@@ -293,9 +260,7 @@ class EltakoFWWKW71L extends IPSModule
             return '';
         }
 
-        // Gateway RX JSON field names ('Device', 'DeviceID', 'DataByteN') verified
-        // against the native EnOcean device modules. The sender address arrives in
-        // 'DeviceID' (same field the gateway uses for the send offset).
+        // 4BS only (field names verified against the native EnOcean modules).
         if ((int) ($data['Device'] ?? -1) !== self::RORG_4BS) {
             return '';
         }
@@ -305,29 +270,24 @@ class EltakoFWWKW71L extends IPSModule
 
         $sender = (int) $data['DeviceID'];
 
-        // Discovery sees every 4BS telegram regardless of payload shape, so the
-        // actor's ID and telegram format can be inspected before they are known.
+        // Discovery sees every 4BS telegram so the Melde-ID can be identified.
         $this->maybeRecordDiscovery($sender, $data);
 
-        // VERIFY@SETUP: DB3 of the actor's data/feedback telegram for the free
-        // profile 07-3F-7F. This is device-specific — confirm via a live sniff
-        // (use Discovery / promiscuous debug) before relying on it.
-        if ((int) ($data['DataByte3'] ?? -1) !== self::DB3_DATA) {
+        // Only dim/feedback telegrams (DataByte3 = 0x02) carry a channel state.
+        if ((int) ($data['DataByte3'] ?? -1) !== self::DB3_DIM) {
             return '';
         }
 
-        $pct = $this->clamp((int) ($data['DataByte2'] ?? 0));
-        $db0 = (int) ($data['DataByte0'] ?? 0);
+        $level = $this->clamp((int) ($data['DataByte2'] ?? 0));
+        $on = ((int) ($data['DataByte0'] ?? 0) & 0x01) === 0x01;
 
-        $idWW = $this->returnId('WW');
-        $idKW = $this->returnId('KW');
+        $idWW = $this->meldeId('WW');
+        $idKW = $this->meldeId('KW');
 
         if ($idWW !== 0 && $sender === $idWW) {
-            $this->SetValue('WW_Actual', $pct);
-            $this->onFeedback('WW', $pct, $db0);
+            $this->applyFeedback('WW', $level, $on);
         } elseif ($idKW !== 0 && $sender === $idKW) {
-            $this->SetValue('KW_Actual', $pct);
-            $this->onFeedback('KW', $pct, $db0);
+            $this->applyFeedback('KW', $level, $on);
         }
 
         return '';
@@ -338,20 +298,20 @@ class EltakoFWWKW71L extends IPSModule
         $form = json_decode(file_get_contents(__DIR__ . '/form.json'), true);
 
         $base = $this->getBaseID();
+        $offset = $this->ReadPropertyInteger('DeviceID');
         $baseStr = $base === null ? $this->Translate('unknown') : sprintf('0x%08X', $base);
-        $offWW = $this->effectiveOffset('WW');
-        $offKW = $this->effectiveOffset('KW');
-        $senderWW = $base === null ? '—' : sprintf('0x%08X', $base + $offWW);
-        $senderKW = $base === null ? '—' : sprintf('0x%08X', $base + $offKW);
+        $senderWW = ($base === null || $offset <= 0) ? '—' : sprintf('0x%08X', $base + $offset);
+        $senderKW = ($base === null || $offset <= 0) ? '—' : sprintf('0x%08X', $base + $offset + 1);
 
-        $last = (int) @$this->GetValue('LastFeedback');
-        $lastStr = $last > 0 ? date('Y-m-d H:i:s', $last) : $this->Translate('never');
-        $bidiStr = (bool) @$this->GetValue('BidiStatus') ? 'OK' : '—';
+        $meldeWW = $this->meldeId('WW');
+        $meldeKW = $this->meldeId('KW');
+        $meldeWWStr = $meldeWW === 0 ? '—' : sprintf('%08X', $meldeWW);
+        $meldeKWStr = $meldeKW === 0 ? '—' : sprintf('%08X', $meldeKW);
 
         $json = json_encode($form);
         $json = str_replace(
-            ['{{BASEID}}', '{{SENDER_WW}}', '{{SENDER_KW}}', '{{OFF_WW}}', '{{OFF_KW}}', '{{LASTFB}}', '{{BIDI}}'],
-            [$baseStr, $senderWW, $senderKW, (string) $offWW, (string) $offKW, $lastStr, $bidiStr],
+            ['{{BASEID}}', '{{SENDER_WW}}', '{{SENDER_KW}}', '{{MELDE_WW}}', '{{MELDE_KW}}'],
+            [$baseStr, $senderWW, $senderKW, $meldeWWStr, $meldeKWStr],
             $json
         );
 
@@ -363,22 +323,62 @@ class EltakoFWWKW71L extends IPSModule
     // =====================================================================
 
     /**
-     * Build and send a 4BS PWM data telegram.
-     *
-     * @param int $offset   Sender offset (added to the gateway BaseID).
-     * @param int $percent  PWM percentage (0-100).
-     * @param int $rampByte DB1 transition/time byte (0x00 = default/instant).
+     * Resolve a channel's sender offset: WW = Geräte-ID, KW = Geräte-ID + 1.
      */
-    private function sendPWM(int $offset, int $percent, int $rampByte = 0x00): void
+    private function offset(string $channel): int
     {
-        $percent = $this->clamp($percent);
-        $this->SendDebug(
-            'TX sendPWM',
-            sprintf('offset=%d pct=%d ramp=0x%02X', $offset, $percent, $rampByte),
-            0
-        );
-        // VERIFY@SETUP: DB2 = raw percentage, DB1 = ramp byte, DB0 = 0x09.
-        $this->sendTelegram($offset, self::DB3_DATA, $percent, $rampByte, self::DB0_DATA);
+        $base = $this->ReadPropertyInteger('DeviceID');
+        return $channel === 'KW' ? $base + 1 : $base;
+    }
+
+    /**
+     * Resolve a channel's feedback (Melde-) ID: WW = Melde-ID, KW = Melde-ID + 1.
+     * Returns 0 when the Melde-ID is unset/invalid.
+     */
+    private function meldeId(string $channel): int
+    {
+        $hex = trim($this->ReadPropertyString('MeldeID'));
+        if ($hex === '' || !ctype_xdigit($hex)) {
+            return 0;
+        }
+        $base = (int) hexdec($hex);
+        return $channel === 'KW' ? $base + 1 : $base;
+    }
+
+    /**
+     * Send a dim command for one channel and (optionally) update the variable.
+     */
+    private function setChannel(string $channel, int $value): void
+    {
+        $value = $this->clamp($value);
+        $offset = $this->offset($channel);
+        if ($offset <= 0) {
+            $this->SendDebug('TX ' . $channel, 'no Geräte-ID set, ignored', 0);
+            return;
+        }
+
+        $db0 = $value > 0 ? self::DB0_ON : self::DB0_OFF;
+        $this->SendDebug('TX ' . $channel, sprintf('offset=%d level=%d db0=0x%02X', $offset, $value, $db0), 0);
+        // DataByte3=0x02, DataByte2=level, DataByte1=0 (internal speed), DataByte0=on/off.
+        $this->sendTelegram($offset, self::DB3_DIM, $value, 0x00, $db0);
+
+        // Status emulation: reflect the command immediately when bidi feedback
+        // is not trusted/available; otherwise the variable follows the actor.
+        if ($this->ReadPropertyBoolean('EmulateStatus')) {
+            $this->SetValue($channel, $value);
+            $this->recomputeStatus();
+        }
+    }
+
+    /**
+     * Apply a confirmed channel state reported by the actor.
+     */
+    private function applyFeedback(string $channel, int $level, bool $on): void
+    {
+        $value = $on ? $level : 0;
+        $this->SetValue($channel, $value);
+        $this->recomputeStatus();
+        $this->SendDebug('RX feedback ' . $channel, sprintf('level=%d on=%d', $level, $on ? 1 : 0), 0);
     }
 
     /**
@@ -386,9 +386,6 @@ class EltakoFWWKW71L extends IPSModule
      */
     private function sendTelegram(int $offset, int $db3, int $db2, int $db1, int $db0): void
     {
-        // Send-JSON field set verified against the native EnOcean device modules:
-        // DataID = parent interface GUID, Device = RORG, DeviceID = BaseID offset,
-        // DestinationID = -1 (broadcast), DataLength = 4 (4BS), DataByte3..0.
         $payload = [
             'DataID'        => self::TX_DATAID,
             'Device'        => self::RORG_4BS,
@@ -404,31 +401,6 @@ class EltakoFWWKW71L extends IPSModule
         $json = json_encode($payload);
         $this->SendDebug('TX -> Parent', $json, 0);
         $this->SendDataToParent($json);
-    }
-
-    /**
-     * Handle a matched confirmation telegram from the actor.
-     *
-     * @param string $channel 'WW' or 'KW'.
-     * @param int    $pct     Reported PWM percentage.
-     * @param int    $db0     Raw DB0 (bit0 = actor on/off flag, VERIFY@SETUP).
-     */
-    private function onFeedback(string $channel, int $pct, int $db0): void
-    {
-        $this->SetValue('LastFeedback', time());
-        $this->SetValue('BidiStatus', true);
-        $this->SetTimerInterval('BidiCheck', self::BIDI_TIMEOUT * 1000);
-
-        // Combined status across both channels avoids per-channel flip-flop.
-        // DB0 bit0 is the actor's own on/off flag and is logged for diagnostics.
-        $on = $this->GetValue('WW_Actual') > 0 || $this->GetValue('KW_Actual') > 0;
-        $this->SetValue('Status', $on);
-
-        $this->SendDebug(
-            'RX feedback ' . $channel,
-            sprintf('pct=%d db0=0x%02X bit0=%d status=%s', $pct, $db0, $db0 & 0x01, $on ? 'on' : 'off'),
-            0
-        );
     }
 
     /**
@@ -471,71 +443,6 @@ class EltakoFWWKW71L extends IPSModule
         $this->SendDebug('Discovery', 'saw ' . $hex, 0);
     }
 
-    /**
-     * Resolve the effective sender offset for a channel.
-     *
-     * Explicit property (> 0) wins; otherwise the value auto-assigned in
-     * ApplyChanges (stored as an attribute) is used.
-     */
-    private function autoAssignOffsets(): void
-    {
-        // Explicit offsets configured on any instance of this module.
-        $explicit = [];
-        foreach (IPS_GetInstanceListByModuleID(self::moduleId()) as $iid) {
-            foreach (self::CHANNELS as $ch) {
-                $o = (int) IPS_GetProperty($iid, 'SenderOffset_' . $ch);
-                if ($o > 0) {
-                    $explicit[] = $o;
-                }
-            }
-        }
-
-        // Deterministic, instance-unique base for auto-assigned offsets.
-        $instances = IPS_GetInstanceListByModuleID(self::moduleId());
-        sort($instances);
-        $idx = (int) array_search($this->InstanceID, $instances, true);
-        $autoBase = self::SENDER_OFFSET_BASE + $idx * 2;
-
-        $slot = 0;
-        foreach (self::CHANNELS as $ch) {
-            $prop = $this->ReadPropertyInteger('SenderOffset_' . $ch);
-            $attr = $this->ReadAttributeInteger('EffectiveOffset_' . $ch);
-
-            if ($prop > 0) {
-                $eff = $prop;
-            } elseif ($attr > 0) {
-                $eff = $attr;
-            } else {
-                $eff = $autoBase + $slot;
-                while (in_array($eff, $explicit, true)) {
-                    $eff += 2;
-                }
-            }
-
-            if ($attr !== $eff) {
-                $this->WriteAttributeInteger('EffectiveOffset_' . $ch, $eff);
-            }
-            $slot++;
-        }
-    }
-
-    private function effectiveOffset(string $channel): int
-    {
-        return $this->ReadAttributeInteger('EffectiveOffset_' . $this->requireChannel($channel));
-    }
-
-    /**
-     * Read a ReturnID property as an integer (0 when unset/invalid).
-     */
-    private function returnId(string $channel): int
-    {
-        $hex = trim($this->ReadPropertyString('ReturnID_' . $channel));
-        if ($hex === '' || !ctype_xdigit($hex)) {
-            return 0;
-        }
-        return (int) hexdec($hex);
-    }
-
     private function recomputeStatus(): void
     {
         $on = $this->GetValue('WW') > 0 || $this->GetValue('KW') > 0;
@@ -544,7 +451,6 @@ class EltakoFWWKW71L extends IPSModule
 
     /**
      * Best-effort read of the parent gateway's BaseID for display in the form.
-     * VERIFY@SETUP: confirm the gateway's actual property name.
      */
     private function getBaseID(): ?int
     {
@@ -575,15 +481,6 @@ class EltakoFWWKW71L extends IPSModule
     private function clamp(int $value, int $min = 0, int $max = 100): int
     {
         return max($min, min($max, $value));
-    }
-
-    private function requireChannel(string $channel): string
-    {
-        $channel = strtoupper(trim($channel));
-        if (!in_array($channel, self::CHANNELS, true)) {
-            throw new Exception('Invalid channel: ' . $channel . " (expected 'WW' or 'KW')");
-        }
-        return $channel;
     }
 
     private static function moduleId(): string

@@ -2,111 +2,102 @@
     "elements": [
         {
             "type": "Label",
-            "caption": "Eltako FWWKW71L – 2-channel PWM dimmer (WW/KW). Replacement driver that evaluates the actor's confirmation telegrams. Connects as a child of the EnOcean gateway."
+            "caption": "Eltako FWWKW71L – 2-Kanal-PWM-Dimmer (WW/KW). Ersatz-Treiber, der die Rückmeldungen des Aktors auswertet. Hängt als Child am EnOcean-Gateway."
+        },
+        {
+            "type": "RowLayout",
+            "items": [
+                {
+                    "type": "NumberSpinner",
+                    "name": "DeviceID",
+                    "caption": "Geräte-ID",
+                    "minimum": 0,
+                    "maximum": 127
+                },
+                {
+                    "type": "Button",
+                    "caption": "Wähle verfügbare Geräte-ID",
+                    "onClick": "EFW_PickFreeDeviceID($id);"
+                }
+            ]
+        },
+        {
+            "type": "Label",
+            "caption": "Sende-Adresse WW: {{SENDER_WW}}   |   KW (Geräte-ID + 1): {{SENDER_KW}}"
+        },
+        {
+            "type": "CheckBox",
+            "name": "EmulateStatus",
+            "caption": "Status emulieren (Werte sofort aus gesendeten Befehlen setzen)"
         },
         {
             "type": "ValidationTextBox",
-            "name": "ReturnID_WW",
-            "caption": "Return ID WW (hex, e.g. FFF01A81)"
+            "name": "MeldeID",
+            "caption": "Melde-ID (hex, z. B. FFF01A81)"
         },
         {
-            "type": "ValidationTextBox",
-            "name": "ReturnID_KW",
-            "caption": "Return ID KW (hex, e.g. FFF01A82)"
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "SenderOffset_WW",
-            "caption": "Sender offset WW (0 = auto)",
-            "minimum": 0,
-            "maximum": 127
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "SenderOffset_KW",
-            "caption": "Sender offset KW (0 = auto)",
-            "minimum": 0,
-            "maximum": 127
+            "type": "Label",
+            "caption": "Melde-ID für bidirektionale Antwort. WW = Melde-ID, KW = Melde-ID + 1.   Aktuell: WW {{MELDE_WW}} / KW {{MELDE_KW}}"
         },
         {
             "type": "CheckBox",
             "name": "DebugPromiscuous",
-            "caption": "Debug: dump ALL incoming telegrams (verify JSON field names)"
+            "caption": "Debug: ALLE eingehenden Telegramme ausgeben (Feldnamen prüfen)"
         }
     ],
     "actions": [
         {
             "type": "Label",
-            "caption": "Gateway BaseID: {{BASEID}}"
+            "caption": "Gateway-BaseID: {{BASEID}}"
         },
         {
             "type": "Label",
-            "caption": "Sender WW: {{SENDER_WW}}  (offset {{OFF_WW}})    |    Sender KW: {{SENDER_KW}}  (offset {{OFF_KW}})"
+            "caption": "Drücken Sie Einlernen, nachdem Sie das Gerät in den Lernmodus versetzt haben (ein Teach-In für WW und KW)."
+        },
+        {
+            "type": "Button",
+            "caption": "Einlernen",
+            "onClick": "EFW_TeachIn($id);"
         },
         {
             "type": "RowLayout",
             "items": [
                 {
                     "type": "Button",
-                    "caption": "Teach-In WW",
-                    "onClick": "EFW_TeachIn($id, 'WW');"
-                },
-                {
-                    "type": "Button",
-                    "caption": "Teach-In KW",
-                    "onClick": "EFW_TeachIn($id, 'KW');"
-                }
-            ]
-        },
-        {
-            "type": "RowLayout",
-            "items": [
-                {
-                    "type": "Button",
-                    "caption": "Test ON",
+                    "caption": "Test EIN (100/100)",
                     "onClick": "EFW_SetBoth($id, 100, 100);"
                 },
                 {
                     "type": "Button",
-                    "caption": "Test OFF",
+                    "caption": "Test AUS",
                     "onClick": "EFW_SwitchOff($id);"
                 },
                 {
                     "type": "Button",
-                    "caption": "Test 50%",
+                    "caption": "Test 50 %",
                     "onClick": "EFW_SetBoth($id, 50, 50);"
-                },
-                {
-                    "type": "Button",
-                    "caption": "Ramp WW",
-                    "onClick": "EFW_TestRamp($id, 'WW');"
-                },
-                {
-                    "type": "Button",
-                    "caption": "Ramp KW",
-                    "onClick": "EFW_TestRamp($id, 'KW');"
                 }
             ]
         },
         {
             "type": "Label",
-            "caption": "Discovery: collects all incoming 4BS sender IDs for 30 seconds. Trigger a status change on the actor while it runs, then adopt the matching ID below."
+            "caption": "Suchen: sammelt 30 s lang alle eingehenden 4BS-Sender-IDs. Schalten Sie den Aktor dabei mehrfach – die Melde-ID erscheint mit hohem Zähler. Dann unten übernehmen."
         },
         {
             "type": "Button",
-            "caption": "Start Discovery (30s)",
+            "caption": "Suchen (30 s)",
             "onClick": "EFW_StartDiscovery($id);"
         },
         {
             "type": "List",
             "name": "DiscoveryList",
-            "caption": "Discovered 4BS IDs",
+            "caption": "Gefundene 4BS-IDs",
             "rowCount": 6,
             "add": false,
             "delete": false,
             "columns": [
                 {
-                    "caption": "Sender ID (hex)",
+                    "caption": "Sender-ID (hex)",
                     "name": "SenderIDHex",
                     "width": "180px"
                 },
@@ -116,7 +107,7 @@
                     "width": "80px"
                 },
                 {
-                    "caption": "Count",
+                    "caption": "Anzahl",
                     "name": "Count",
                     "width": "80px"
                 }
@@ -124,23 +115,9 @@
             "values": []
         },
         {
-            "type": "RowLayout",
-            "items": [
-                {
-                    "type": "Button",
-                    "caption": "Selected → ReturnID WW",
-                    "onClick": "EFW_AdoptDiscovered($id, 'WW', $DiscoveryList['SenderIDHex']);"
-                },
-                {
-                    "type": "Button",
-                    "caption": "Selected → ReturnID KW",
-                    "onClick": "EFW_AdoptDiscovered($id, 'KW', $DiscoveryList['SenderIDHex']);"
-                }
-            ]
-        },
-        {
-            "type": "Label",
-            "caption": "Last feedback: {{LASTFB}}    |    Bidi OK: {{BIDI}}"
+            "type": "Button",
+            "caption": "Ausgewählte → Melde-ID",
+            "onClick": "EFW_AdoptDiscovered($id, $DiscoveryList['SenderIDHex']);"
         }
     ],
     "status": []

@@ -4,9 +4,7 @@
     "type": 3,
     "vendor": "Eltako",
     "aliases": [
-        "Eltako FWWKW71L",
-        "FWWKW71L",
-        "WW/KW PWM Dimmer"
+        "Eltako FWWKW71L"
     ],
     "url": "https://github.com/norbert-schmerold/IPS_Eltako-FWWKW71L",
     "parentRequirements": [

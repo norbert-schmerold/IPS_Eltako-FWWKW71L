@@ -166,6 +166,11 @@ class EltakoFWWKW71L extends IPSModule
         } else {
             $this->SetReceiveDataFilter('.*"Device":' . self::RORG_4BS . '.*');
         }
+
+        // Sync the variables to the actor's actual state when the gateway is ready.
+        if ($this->ReadPropertyInteger('DeviceID') > 0 && $this->HasActiveParent()) {
+            $this->sendStatusRequest();
+        }
     }
 
     // =====================================================================
@@ -219,7 +224,7 @@ class EltakoFWWKW71L extends IPSModule
     {
         $offset = $this->ReadPropertyInteger('DeviceID');
         if ($offset <= 0) {
-            echo $this->Translate('Please set a Geräte-ID first.');
+            echo $this->Translate('Bitte zuerst die Geräte-ID setzen.');
             return;
         }
         $this->SendDebug(
@@ -236,6 +241,8 @@ class EltakoFWWKW71L extends IPSModule
      */
     public function PickFreeDeviceID(): void
     {
+        // Sending always uses a single offset (channel is in DataByte1), so one
+        // offset per instance is enough.
         $used = [];
         foreach (IPS_GetInstanceListByModuleID(self::moduleId()) as $iid) {
             if ($iid === $this->InstanceID) {
@@ -244,12 +251,11 @@ class EltakoFWWKW71L extends IPSModule
             $d = (int) IPS_GetProperty($iid, 'DeviceID');
             if ($d > 0) {
                 $used[$d] = true;
-                $used[$d + 1] = true;
             }
         }
         $n = self::SENDER_OFFSET_BASE;
-        while (isset($used[$n]) || isset($used[$n + 1])) {
-            $n += 2;
+        while (isset($used[$n])) {
+            $n++;
         }
         $this->UpdateFormField('DeviceID', 'value', $n);
     }
@@ -408,7 +414,8 @@ class EltakoFWWKW71L extends IPSModule
 
         // Format auto-detection.
         // High-resolution: single Melde-ID, channel in DataByte1, 10-bit value.
-        if ($sender === $melde && ($db1 === self::DB1_WW || $db1 === self::DB1_KW)) {
+        // DataByte0 = 0x0E marks a confirmation (a command/echo uses 0x0F).
+        if ($sender === $melde && $db0 === 0x0E && ($db1 === self::DB1_WW || $db1 === self::DB1_KW)) {
             $channel = $db1 === self::DB1_WW ? 'WW' : 'KW';
             $level = $this->clamp((int) round((($db3 << 8) | $db2) * 100 / self::VALUE_MAX));
             $this->setDetectedFormat(self::FORMAT_HIRES);
@@ -651,6 +658,11 @@ class EltakoFWWKW71L extends IPSModule
     private function maybeRecordDiscovery(int $sender, array $data): void
     {
         if (!$this->ReadAttributeBoolean('DiscoveryActive')) {
+            return;
+        }
+        // Hide our own send echo (DataByte0 = 0x0F) so only actor confirmations
+        // (0x0E hi-res, 0x09/0x08 percent) show up as Melde-ID candidates.
+        if ((int) ($data['DataByte0'] ?? -1) === self::DB0_CMD) {
             return;
         }
 

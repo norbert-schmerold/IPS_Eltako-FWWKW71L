@@ -1,0 +1,147 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "caption": "Eltako FWWKW71L – 2-channel PWM dimmer (WW/KW). Replacement driver that evaluates the actor's confirmation telegrams. Connects as a child of the EnOcean gateway."
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "ReturnID_WW",
+            "caption": "Return ID WW (hex, e.g. FFF01A81)"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "ReturnID_KW",
+            "caption": "Return ID KW (hex, e.g. FFF01A82)"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "SenderOffset_WW",
+            "caption": "Sender offset WW (0 = auto)",
+            "minimum": 0,
+            "maximum": 127
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "SenderOffset_KW",
+            "caption": "Sender offset KW (0 = auto)",
+            "minimum": 0,
+            "maximum": 127
+        },
+        {
+            "type": "CheckBox",
+            "name": "DebugPromiscuous",
+            "caption": "Debug: dump ALL incoming telegrams (verify JSON field names)"
+        }
+    ],
+    "actions": [
+        {
+            "type": "Label",
+            "caption": "Gateway BaseID: {{BASEID}}"
+        },
+        {
+            "type": "Label",
+            "caption": "Sender WW: {{SENDER_WW}}  (offset {{OFF_WW}})    |    Sender KW: {{SENDER_KW}}  (offset {{OFF_KW}})"
+        },
+        {
+            "type": "RowLayout",
+            "items": [
+                {
+                    "type": "Button",
+                    "caption": "Teach-In WW",
+                    "onClick": "EFW_TeachIn($id, 'WW');"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Teach-In KW",
+                    "onClick": "EFW_TeachIn($id, 'KW');"
+                }
+            ]
+        },
+        {
+            "type": "RowLayout",
+            "items": [
+                {
+                    "type": "Button",
+                    "caption": "Test ON",
+                    "onClick": "EFW_SetBoth($id, 100, 100);"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Test OFF",
+                    "onClick": "EFW_SwitchOff($id);"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Test 50%",
+                    "onClick": "EFW_SetBoth($id, 50, 50);"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Ramp WW",
+                    "onClick": "EFW_TestRamp($id, 'WW');"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Ramp KW",
+                    "onClick": "EFW_TestRamp($id, 'KW');"
+                }
+            ]
+        },
+        {
+            "type": "Label",
+            "caption": "Discovery: collects all incoming 4BS sender IDs for 30 seconds. Trigger a status change on the actor while it runs, then adopt the matching ID below."
+        },
+        {
+            "type": "Button",
+            "caption": "Start Discovery (30s)",
+            "onClick": "EFW_StartDiscovery($id);"
+        },
+        {
+            "type": "List",
+            "name": "DiscoveryList",
+            "caption": "Discovered 4BS IDs",
+            "rowCount": 6,
+            "add": false,
+            "delete": false,
+            "columns": [
+                {
+                    "caption": "Sender ID (hex)",
+                    "name": "SenderIDHex",
+                    "width": "180px"
+                },
+                {
+                    "caption": "DB2",
+                    "name": "DB2",
+                    "width": "80px"
+                },
+                {
+                    "caption": "Count",
+                    "name": "Count",
+                    "width": "80px"
+                }
+            ],
+            "values": []
+        },
+        {
+            "type": "RowLayout",
+            "items": [
+                {
+                    "type": "Button",
+                    "caption": "Selected → ReturnID WW",
+                    "onClick": "EFW_AdoptDiscovered($id, 'WW', $DiscoveryList['SenderIDHex']);"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Selected → ReturnID KW",
+                    "onClick": "EFW_AdoptDiscovered($id, 'KW', $DiscoveryList['SenderIDHex']);"
+                }
+            ]
+        },
+        {
+            "type": "Label",
+            "caption": "Last feedback: {{LASTFB}}    |    Bidi OK: {{BIDI}}"
+        }
+    ],
+    "status": []
+}

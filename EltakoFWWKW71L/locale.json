@@ -1,0 +1,45 @@
+{
+    "translations": {
+        "de": {
+            "Eltako FWWKW71L – 2-channel PWM dimmer (WW/KW). Replacement driver that evaluates the actor's confirmation telegrams. Connects as a child of the EnOcean gateway.": "Eltako FWWKW71L – 2-Kanal-PWM-Dimmer (WW/KW). Ersatz-Treiber, der die Bestätigungs-Telegramme des Aktors auswertet. Verbindet sich als Child des EnOcean-Gateways.",
+
+            "Warm White": "Warmweiß",
+            "Cold White": "Kaltweiß",
+            "Warm White (actual)": "Warmweiß (Ist)",
+            "Cold White (actual)": "Kaltweiß (Ist)",
+            "Status": "Status",
+            "Last feedback": "Letzte Rückmeldung",
+            "Bidi OK": "Bidi OK",
+
+            "Return ID WW (hex, e.g. FFF01A81)": "Return-ID WW (hex, z.B. FFF01A81)",
+            "Return ID KW (hex, e.g. FFF01A82)": "Return-ID KW (hex, z.B. FFF01A82)",
+            "Sender offset WW (0 = auto)": "Sender-Offset WW (0 = automatisch)",
+            "Sender offset KW (0 = auto)": "Sender-Offset KW (0 = automatisch)",
+            "Debug: dump ALL incoming telegrams (verify JSON field names)": "Debug: ALLE eingehenden Telegramme ausgeben (JSON-Feldnamen verifizieren)",
+
+            "Gateway BaseID: {{BASEID}}": "Gateway-BaseID: {{BASEID}}",
+            "Sender WW: {{SENDER_WW}}  (offset {{OFF_WW}})    |    Sender KW: {{SENDER_KW}}  (offset {{OFF_KW}})": "Sender WW: {{SENDER_WW}}  (Offset {{OFF_WW}})    |    Sender KW: {{SENDER_KW}}  (Offset {{OFF_KW}})",
+
+            "Teach-In WW": "Teach-In WW",
+            "Teach-In KW": "Teach-In KW",
+            "Test ON": "Test EIN",
+            "Test OFF": "Test AUS",
+            "Test 50%": "Test 50%",
+            "Ramp WW": "Rampe WW",
+            "Ramp KW": "Rampe KW",
+
+            "Discovery: collects all incoming 4BS sender IDs for 30 seconds. Trigger a status change on the actor while it runs, then adopt the matching ID below.": "Discovery: sammelt 30 Sekunden lang alle eingehenden 4BS-Sender-IDs. Während des Laufs eine Statusänderung am Aktor auslösen und dann unten die passende ID übernehmen.",
+            "Start Discovery (30s)": "Discovery starten (30s)",
+            "Discovered 4BS IDs": "Gefundene 4BS-IDs",
+            "Sender ID (hex)": "Sender-ID (hex)",
+            "Count": "Anzahl",
+            "Selected → ReturnID WW": "Auswahl → Return-ID WW",
+            "Selected → ReturnID KW": "Auswahl → Return-ID KW",
+
+            "Last feedback: {{LASTFB}}    |    Bidi OK: {{BIDI}}": "Letzte Rückmeldung: {{LASTFB}}    |    Bidi OK: {{BIDI}}",
+
+            "unknown": "unbekannt",
+            "never": "nie"
+        }
+    }
+}

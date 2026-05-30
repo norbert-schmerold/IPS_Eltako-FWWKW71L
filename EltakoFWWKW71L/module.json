@@ -1,0 +1,18 @@
+{
+    "id": "{BA799264-A70F-4CBF-BB9A-89E6492A22E9}",
+    "name": "EltakoFWWKW71L",
+    "type": 3,
+    "vendor": "Eltako",
+    "aliases": [
+        "Eltako FWWKW71L",
+        "FWWKW71L",
+        "WW/KW PWM Dimmer"
+    ],
+    "url": "https://github.com/norbert-schmerold/Eltako-FWWKW71L",
+    "parentRequirements": [
+        "{A52FEFE9-7858-4B8E-A96E-26E15CB944F7}"
+    ],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "EFW"
+}

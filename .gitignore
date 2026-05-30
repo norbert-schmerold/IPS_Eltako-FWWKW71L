@@ -1,0 +1,23 @@
+# PHP / Composer
+/vendor/
+composer.lock
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+*~
+
+# Symcon local test artifacts
+/.symcon-local/

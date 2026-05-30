@@ -326,8 +326,12 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Finish Melde-ID detection (called by the timer): pick the lowest collected
-     * confirmation address (= warm-white channel, Base ID+1) and write it in.
+     * Finish Melde-ID detection (called by the timer) and derive the warm-white
+     * Melde-ID (Base ID+1) from the collected confirmation addresses:
+     *   - hi-res: the actor confirms from a single address -> use it directly;
+     *   - percent: a status request only triggers the Master telegram (Base ID+4),
+     *     so the warm-white channel = Master - 3. If several channel addresses
+     *     were collected (e.g. the actor was switched), the lowest is Base ID+1.
      */
     public function StopDetectMelde(): void
     {
@@ -343,10 +347,36 @@ class EltakoFWWKW71L extends IPSModule
             $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Keine Rückmeldung erkannt. Aktor schalten und erneut versuchen, oder Melde-ID manuell eintragen.'));
             return;
         }
-        sort($list);
-        $hex = strtoupper(str_pad(dechex($list[0]), 8, '0', STR_PAD_LEFT));
+
+        $hires = [];
+        $percent = [];
+        foreach ($list as $c) {
+            if (!empty($c['h'])) {
+                $hires[] = (int) $c['s'];
+            } else {
+                $percent[] = (int) $c['s'];
+            }
+        }
+
+        $note = '';
+        if (count($hires) > 0) {
+            sort($hires);
+            $pick = $hires[0];
+        } else {
+            sort($percent);
+            if (count($percent) === 1) {
+                // Only the Master (Base ID+4) answered the status request.
+                $master = $percent[0];
+                $pick = $master - 3;
+                $note = sprintf($this->Translate(' (Master %08X − 3)'), $master);
+            } else {
+                $pick = $percent[0]; // lowest channel address = warmweiß (Base ID+1)
+            }
+        }
+
+        $hex = strtoupper(str_pad(dechex($pick), 8, '0', STR_PAD_LEFT));
         $this->UpdateFormField('MeldeID', 'value', $hex);
-        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
+        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s%s — bitte speichern.'), $hex, $note));
         $this->SendDebug('DetectMelde', 'picked ' . $hex . ' from ' . count($list) . ' candidate(s)', 0);
     }
 
@@ -557,11 +587,14 @@ class EltakoFWWKW71L extends IPSModule
         if (!is_array($list)) {
             $list = [];
         }
-        if (!in_array($sender, $list, true)) {
-            $list[] = $sender;
-            $this->SetBuffer('DetectCandidates', json_encode($list));
-            $this->SendDebug('DetectMelde', 'candidate ' . strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT)), 0);
+        foreach ($list as $c) {
+            if ((int) $c['s'] === $sender) {
+                return; // already recorded
+            }
         }
+        $list[] = ['s' => $sender, 'h' => $isHires];
+        $this->SetBuffer('DetectCandidates', json_encode($list));
+        $this->SendDebug('DetectMelde', 'candidate ' . strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT)) . ($isHires ? ' (hires)' : ' (percent)'), 0);
     }
 
     /** Remember a channel's last non-zero brightness (for the Status-on restore). */

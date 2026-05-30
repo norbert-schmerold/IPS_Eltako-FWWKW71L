@@ -23,7 +23,7 @@
         },
         {
             "type": "Label",
-            "caption": "Sende-Adresse WW: {{SENDER_WW}}   |   KW (Geräte-ID + 1): {{SENDER_KW}}"
+            "caption": "Sende-Adresse (WW und KW über dieselbe Adresse, Kanal in DataByte1): {{SENDER}}"
         },
         {
             "type": "CheckBox",
@@ -33,11 +33,11 @@
         {
             "type": "ValidationTextBox",
             "name": "MeldeID",
-            "caption": "Melde-ID (hex, z. B. FFF01A81)"
+            "caption": "Melde-ID (hex, z. B. FFF02404)"
         },
         {
             "type": "Label",
-            "caption": "Melde-ID für bidirektionale Antwort. WW = Melde-ID, KW = Melde-ID + 1.   Aktuell: WW {{MELDE_WW}} / KW {{MELDE_KW}}"
+            "caption": "Melde-ID für bidirektionale Antwort (WW und KW über dieselbe Melde-ID, Kanal in DataByte1).   Aktuell: {{MELDE}}"
         },
         {
             "type": "CheckBox",

@@ -16,21 +16,22 @@ den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
 ## Architektur
 
 - **Device-Modul** (`type: 3`), hängt sich als Child an das bestehende
-  EnOcean-Gateway (`ConnectParent`).
+  EnOcean-Gateway (`ConnectParent`). Nachbau des nativen Moduls
+  **„Eltako FWWKW71L (Hochauflösender WW/CW)"**.
 - Telegramme: **4BS, freies Profil 07-3F-7F**, RORG `0xA5` (= `Device: 165`).
-- **Eine Geräte-ID** (Sende-Offset auf der Gateway-BaseID): Kanal **WW** sendet
-  über den Offset, **KW** über Offset **+ 1**. Ein Teach-In lernt beide Kanäle.
-- **Eine Melde-ID** (Rückmelde-Adresse des Aktors): **WW** meldet über die
-  Melde-ID, **KW** über Melde-ID **+ 1**.
+- **Eine Geräte-ID** (Sende-Offset auf der Gateway-BaseID): **beide** Kanäle
+  senden über dieselbe Adresse, der Kanal steckt in `DataByte1`.
+- **Eine Melde-ID** (Rückmelde-Adresse des Aktors): **beide** Kanäle melden über
+  dieselbe Melde-ID, Kanal ebenfalls in `DataByte1`.
 - Dimm-/Rückmelde-Telegramm (gegen Live-Mitschnitt des Original-Moduls
-  verifiziert, `DataLength = 4`):
+  verifiziert, `DataLength = 4`, **10-Bit-Auflösung**):
 
   | Byte | Wert |
   | --- | --- |
-  | `DataByte3` | `0x02` (Dimm-Telegramm) |
-  | `DataByte2` | Helligkeit `0…100 %` |
-  | `DataByte1` | `0x00` (interne Dimmgeschwindigkeit) |
-  | `DataByte0` | `0x09` = ein, `0x08` = aus (Bit0 = An/Aus) |
+  | `DataByte3` | obere 2 Bit des 10-Bit-Werts (0–3) |
+  | `DataByte2` | untere 8 Bit des Werts → `Wert = DataByte3·256 + DataByte2`, `0…1023` (1023 = 100 %) |
+  | `DataByte1` | Kanal: `0x10` = WW, `0x11` = KW |
+  | `DataByte0` | `0x0F` = Befehl (Aktor antwortet mit `0x0E`) |
 
 Drei GUIDs mit unterschiedlichen Rollen (gemäß
 [Symcon-Datenfluss-Doku](https://www.symcon.de/de/service/dokumentation/entwicklerbereich/sdk-tools/sdk-php/datenfluss/)
@@ -68,8 +69,8 @@ GUIDs und Telegramm-Feldnamen (`Device`, `DeviceID`, `DestinationID`,
 3. **Melde-ID** ermitteln:
    - *Suchen (30 s)* starten und den Aktor mehrfach schalten.
    - In der Liste die ID mit hohem Zähler auswählen und per Button als Melde-ID
-     übernehmen, danach speichern. (KW = Melde-ID + 1 wird automatisch genutzt.)
-   - Alternativ direkt eintragen (z. B. `FFF01A81`).
+     übernehmen, danach speichern. (WW und KW melden über dieselbe Melde-ID.)
+   - Alternativ direkt eintragen (z. B. `FFF02404`).
 4. **Status emulieren**: optional aktivieren, wenn die Variablen sofort den
    gesendeten Werten folgen sollen (statt erst auf die Rückmeldung zu warten).
 5. **Test** über die Buttons *Test EIN/AUS/50 %*.

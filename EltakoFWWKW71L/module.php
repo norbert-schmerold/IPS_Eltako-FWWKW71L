@@ -5,21 +5,21 @@ declare(strict_types=1);
 /**
  * Eltako FWWKW71L – 2-channel PWM dimmer (WW/KW) for LED 12-36V DC.
  *
- * Replacement driver for the native Symcon module, which fails to evaluate the
- * actor's confirmation telegrams. Mirrors the native module's single-ID layout:
+ * Replacement driver for the native "Hochauflösender WW/CW" module, which fails
+ * to evaluate the actor's confirmation telegrams. Single-ID layout:
  *
- *   - ONE "Geräte-ID" (sender offset on the gateway BaseID). Channel WW uses the
- *     offset, KW uses offset + 1.
- *   - ONE "Melde-ID" (the actor's bidirectional feedback address). WW reports
- *     from the Melde-ID, KW from Melde-ID + 1.
+ *   - ONE "Geräte-ID" (sender offset on the gateway BaseID); both channels send
+ *     from it, the channel is carried in DataByte1.
+ *   - ONE "Melde-ID" (the actor's bidirectional feedback address); both channels
+ *     report from it, again distinguished by DataByte1.
  *   - ONE teach-in for both channels.
  *
  * Telegram format verified against a live sniff of the native module
- * (EEP 07-3F-7F, 4BS): Device=165, DataLength=4,
- *   DataByte3 = 0x02 (dim telegram)
- *   DataByte2 = level 0..100 (%)
- *   DataByte1 = 0x00 (internal dim speed)
- *   DataByte0 = 0x09 (on) / 0x08 (off)   [bit0 = on/off, bit3 = LRN data bit]
+ * (EEP 07-3F-7F, 4BS, high resolution): Device=165, DataLength=4,
+ *   DataByte3 = high 2 bits of a 10-bit value (0..1023)
+ *   DataByte2 = low byte of that value          (1023 = 100 %)
+ *   DataByte1 = channel: 0x10 = WW, 0x11 = KW
+ *   DataByte0 = 0x0F (command); the actor confirms with 0x0E
  */
 class EltakoFWWKW71L extends IPSModule
 {
@@ -33,11 +33,16 @@ class EltakoFWWKW71L extends IPSModule
 
     /** RORG 4BS (0xA5). */
     private const RORG_4BS = 165;
-    /** DataByte3 of a dim data/feedback telegram (verified). */
-    private const DB3_DIM = 0x02;
-    /** DataByte0 flags: bit3 = LRN data bit, bit0 = on/off (verified). */
-    private const DB0_ON = 0x09;
-    private const DB0_OFF = 0x08;
+    /**
+     * High-resolution dim value is 10-bit (0..1023), split across two bytes:
+     * DataByte3 = high 2 bits, DataByte2 = low byte. 1023 = 100 %.
+     */
+    private const VALUE_MAX = 1023;
+    /** Channel selector in DataByte1 (verified): WW = 0x10, KW = 0x11. */
+    private const DB1_WW = 0x10;
+    private const DB1_KW = 0x11;
+    /** DataByte0 of an outgoing command (the actor confirms with 0x0E). */
+    private const DB0_CMD = 0x0F;
 
     /**
      * 4BS teach-in telegram (standard Eltako variable teach for dim actors).
@@ -273,22 +278,26 @@ class EltakoFWWKW71L extends IPSModule
         // Discovery sees every 4BS telegram so the Melde-ID can be identified.
         $this->maybeRecordDiscovery($sender, $data);
 
-        // Only dim/feedback telegrams (DataByte3 = 0x02) carry a channel state.
-        if ((int) ($data['DataByte3'] ?? -1) !== self::DB3_DIM) {
+        // Only the actor's own Melde-ID carries our channel state.
+        $melde = $this->meldeIdValue();
+        if ($melde === 0 || $sender !== $melde) {
             return '';
         }
 
-        $level = $this->clamp((int) ($data['DataByte2'] ?? 0));
-        $on = ((int) ($data['DataByte0'] ?? 0) & 0x01) === 0x01;
-
-        $idWW = $this->meldeId('WW');
-        $idKW = $this->meldeId('KW');
-
-        if ($idWW !== 0 && $sender === $idWW) {
-            $this->applyFeedback('WW', $level, $on);
-        } elseif ($idKW !== 0 && $sender === $idKW) {
-            $this->applyFeedback('KW', $level, $on);
+        // Channel from DataByte1 (0x10 = WW, 0x11 = KW); ignore anything else.
+        $db1 = (int) ($data['DataByte1'] ?? -1);
+        if ($db1 === self::DB1_WW) {
+            $channel = 'WW';
+        } elseif ($db1 === self::DB1_KW) {
+            $channel = 'KW';
+        } else {
+            return '';
         }
+
+        // 10-bit value (DataByte3 high bits, DataByte2 low byte) -> 0..100 %.
+        $raw = (((int) ($data['DataByte3'] ?? 0)) << 8) | ((int) ($data['DataByte2'] ?? 0));
+        $level = $this->clamp((int) round($raw * 100 / self::VALUE_MAX));
+        $this->applyFeedback($channel, $level, $level > 0);
 
         return '';
     }
@@ -300,18 +309,15 @@ class EltakoFWWKW71L extends IPSModule
         $base = $this->getBaseID();
         $offset = $this->ReadPropertyInteger('DeviceID');
         $baseStr = $base === null ? $this->Translate('unknown') : sprintf('0x%08X', $base);
-        $senderWW = ($base === null || $offset <= 0) ? '—' : sprintf('0x%08X', $base + $offset);
-        $senderKW = ($base === null || $offset <= 0) ? '—' : sprintf('0x%08X', $base + $offset + 1);
+        $senderStr = ($base === null || $offset <= 0) ? '—' : sprintf('0x%08X', $base + $offset);
 
-        $meldeWW = $this->meldeId('WW');
-        $meldeKW = $this->meldeId('KW');
-        $meldeWWStr = $meldeWW === 0 ? '—' : sprintf('%08X', $meldeWW);
-        $meldeKWStr = $meldeKW === 0 ? '—' : sprintf('%08X', $meldeKW);
+        $melde = $this->meldeIdValue();
+        $meldeStr = $melde === 0 ? '—' : sprintf('%08X', $melde);
 
         $json = json_encode($form);
         $json = str_replace(
-            ['{{BASEID}}', '{{SENDER_WW}}', '{{SENDER_KW}}', '{{MELDE_WW}}', '{{MELDE_KW}}'],
-            [$baseStr, $senderWW, $senderKW, $meldeWWStr, $meldeKWStr],
+            ['{{BASEID}}', '{{SENDER}}', '{{MELDE}}'],
+            [$baseStr, $senderStr, $meldeStr],
             $json
         );
 
@@ -323,44 +329,49 @@ class EltakoFWWKW71L extends IPSModule
     // =====================================================================
 
     /**
-     * Resolve a channel's sender offset: WW = Geräte-ID, KW = Geräte-ID + 1.
+     * The single feedback (Melde-) ID; both channels report from it, the channel
+     * is carried in DataByte1. Returns 0 when unset/invalid.
      */
-    private function offset(string $channel): int
-    {
-        $base = $this->ReadPropertyInteger('DeviceID');
-        return $channel === 'KW' ? $base + 1 : $base;
-    }
-
-    /**
-     * Resolve a channel's feedback (Melde-) ID: WW = Melde-ID, KW = Melde-ID + 1.
-     * Returns 0 when the Melde-ID is unset/invalid.
-     */
-    private function meldeId(string $channel): int
+    private function meldeIdValue(): int
     {
         $hex = trim($this->ReadPropertyString('MeldeID'));
         if ($hex === '' || !ctype_xdigit($hex)) {
             return 0;
         }
-        $base = (int) hexdec($hex);
-        return $channel === 'KW' ? $base + 1 : $base;
+        return (int) hexdec($hex);
+    }
+
+    /** Channel selector byte (DataByte1) for a channel. */
+    private function channelByte(string $channel): int
+    {
+        return $channel === 'KW' ? self::DB1_KW : self::DB1_WW;
     }
 
     /**
      * Send a dim command for one channel and (optionally) update the variable.
+     * Both channels use the same sender offset (Geräte-ID); the channel is
+     * encoded in DataByte1. The 0..100 % value is scaled to the 10-bit telegram.
      */
     private function setChannel(string $channel, int $value): void
     {
         $value = $this->clamp($value);
-        $offset = $this->offset($channel);
+        $offset = $this->ReadPropertyInteger('DeviceID');
         if ($offset <= 0) {
             $this->SendDebug('TX ' . $channel, 'no Geräte-ID set, ignored', 0);
             return;
         }
 
-        $db0 = $value > 0 ? self::DB0_ON : self::DB0_OFF;
-        $this->SendDebug('TX ' . $channel, sprintf('offset=%d level=%d db0=0x%02X', $offset, $value, $db0), 0);
-        // DataByte3=0x02, DataByte2=level, DataByte1=0 (internal speed), DataByte0=on/off.
-        $this->sendTelegram($offset, self::DB3_DIM, $value, 0x00, $db0);
+        $raw = (int) round($value * self::VALUE_MAX / 100);
+        $db3 = ($raw >> 8) & 0xFF;   // high 2 bits
+        $db2 = $raw & 0xFF;          // low byte
+        $db1 = $this->channelByte($channel);
+
+        $this->SendDebug(
+            'TX ' . $channel,
+            sprintf('offset=%d pct=%d raw=%d DB3..0=%02X %02X %02X %02X', $offset, $value, $raw, $db3, $db2, $db1, self::DB0_CMD),
+            0
+        );
+        $this->sendTelegram($offset, $db3, $db2, $db1, self::DB0_CMD);
 
         // Status emulation: reflect the command immediately when bidi feedback
         // is not trusted/available; otherwise the variable follows the actor.

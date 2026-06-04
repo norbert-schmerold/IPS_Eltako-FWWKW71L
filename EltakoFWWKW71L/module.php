@@ -88,6 +88,17 @@ class EltakoFWWKW71L extends IPSModule
     private const DETECT_PHASE_MS = 5000;
 
     /**
+     * Reliability resend. EnOcean is an unacknowledged radio: on a rapid off/on or
+     * when something else transmits at the same instant (a motion detector is the
+     * classic culprit), one of the two channel telegrams of a SetBoth() can be lost,
+     * leaving only WW or only KW lit. After every command we latch the intended level
+     * and, a short moment later, verify the actor actually reached it — resending just
+     * the channel that did not arrive (see ResendCheck()).
+     */
+    private const RESEND_DELAY_MS = 700;
+    private const RESEND_MAX_TRIES = 2;
+
+    /**
      * Colour-temperature endpoints (Kelvin) for the standard ~TWColor slider used
      * by the native "Licht" tile. T = 0 % maps to warm, T = 100 % to cold.
      */
@@ -99,6 +110,17 @@ class EltakoFWWKW71L extends IPSModule
      * itself stays a plain integer (any value via script/SetValue).
      */
     private const KELVIN_STEP = 100;
+
+    /**
+     * Slider "Verwendung" (USAGE_TYPE) of the modern presentation. The native "Licht"
+     * tile assigns roles by this value: the slider tagged Intensität becomes the tile's
+     * brightness. Only the overall "Helligkeit" carries USAGE_INTENSITY; the raw WW/KW
+     * channels stay USAGE_STANDARD so they are shown as plain detail sliders and never
+     * get picked as the tile brightness (which previously latched onto KW because all
+     * three shared the legacy "~Intensity.*" profile = Intensität).
+     */
+    private const USAGE_STANDARD  = 0;
+    private const USAGE_INTENSITY = 2;
 
     public function Create()
     {
@@ -117,25 +139,62 @@ class EltakoFWWKW71L extends IPSModule
         // Latched once the hi-res Master telegram (Haupt+4) is seen → ignore the
         // redundant percent telegrams from then on (reset on ApplyChanges).
         $this->RegisterAttributeBoolean('MasterSeen', false);
+        // Reliability resend: the level last commanded per channel (-1 = none pending)
+        // and the remaining resend attempts. Transient command-delivery state only —
+        // not colour memory; cleared as soon as the actor confirms the target.
+        $this->RegisterAttributeInteger('DesiredWW', -1);
+        $this->RegisterAttributeInteger('DesiredKW', -1);
+        $this->RegisterAttributeInteger('ResendTries', 0);
 
         // --- Variables ---
         // CCT comfort controls (compute WW/KW) plus the raw channels (fully adjustable).
-        // The presentations match what the native "Licht" tile expects (An/Aus,
-        // Intensität, Farbtemperatur). The colour-temperature slider uses the new
-        // presentation with the colour-temperature template and is limited to the
-        // device's actual range (KELVIN_WARM..KELVIN_COLD).
+        // The presentations match what the native "Licht" tile expects and, crucially,
+        // assign the slider roles explicitly via the modern Slider presentation instead
+        // of the legacy "~Intensity.*" profile: the tile reads the brightness from the
+        // slider tagged Intensität (USAGE_INTENSITY), the colour temperature from the
+        // one tagged via the colour-temperature template, and on/off from the Switch.
+        //   - Status         : Switch (An/Aus)
+        //   - Helligkeit     : Slider, Intensität  → THE tile brightness (overall level)
+        //   - Farbtemperatur : Slider, colour-temperature template (KELVIN_WARM..COLD)
+        //   - WW / KW        : Slider, Standard     → plain % detail channels, not brightness
+        // Previously all three % variables shared "~Intensity.100" (= Intensität), so the
+        // tile picked the last one (KW) as its brightness instead of "Helligkeit".
         $this->RegisterVariableBoolean('Status', 'Status', '~Switch', 10);
-        $this->RegisterVariableInteger('Helligkeit', 'Helligkeit', '~Intensity.100', 20);
+        $this->RegisterVariableInteger('Helligkeit', 'Helligkeit', [
+            'PRESENTATION' => VARIABLE_PRESENTATION_SLIDER,
+            'USAGE_TYPE'   => self::USAGE_INTENSITY,
+            'MIN'          => 0,
+            'MAX'          => 100,
+            'STEP_SIZE'    => 1,
+            'DIGITS'       => 0,
+            'SUFFIX'       => ' %',
+        ], 20);
         $this->RegisterVariableInteger('Farbtemperatur', 'Farbtemperatur', [
             'PRESENTATION' => VARIABLE_PRESENTATION_SLIDER,
             'TEMPLATE'     => VARIABLE_TEMPLATE_SLIDER_COLOR_TEMPERATURE,
             'MIN'          => self::KELVIN_WARM,
             'MAX'          => self::KELVIN_COLD,
-            'STEPSIZE'     => self::KELVIN_STEP,
+            'STEP_SIZE'    => self::KELVIN_STEP,
             'DIGITS'       => 0,
         ], 30);
-        $this->RegisterVariableInteger('WW', 'Warmweiß', '~Intensity.100', 40);
-        $this->RegisterVariableInteger('KW', 'Kaltweiß', '~Intensity.100', 50);
+        $this->RegisterVariableInteger('WW', 'Warmweiß', [
+            'PRESENTATION' => VARIABLE_PRESENTATION_SLIDER,
+            'USAGE_TYPE'   => self::USAGE_STANDARD,
+            'MIN'          => 0,
+            'MAX'          => 100,
+            'STEP_SIZE'    => 1,
+            'DIGITS'       => 0,
+            'SUFFIX'       => ' %',
+        ], 40);
+        $this->RegisterVariableInteger('KW', 'Kaltweiß', [
+            'PRESENTATION' => VARIABLE_PRESENTATION_SLIDER,
+            'USAGE_TYPE'   => self::USAGE_STANDARD,
+            'MIN'          => 0,
+            'MAX'          => 100,
+            'STEP_SIZE'    => 1,
+            'DIGITS'       => 0,
+            'SUFFIX'       => ' %',
+        ], 50);
 
         $this->EnableAction('Status');
         $this->EnableAction('Helligkeit');
@@ -150,6 +209,7 @@ class EltakoFWWKW71L extends IPSModule
 
         // --- Timers ---
         $this->RegisterTimer('DetectStop', 0, 'EFW_StopDetectMelde($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('ResendCheck', 0, 'EFW_ResendCheck($_IPS[\'TARGET\']);');
 
         $this->ConnectParent(self::GATEWAY_MODULE_GUID);
     }
@@ -168,6 +228,9 @@ class EltakoFWWKW71L extends IPSModule
         // Re-evaluate the feedback format after a (re)configuration: prefer the
         // hi-res Master again, fall back to percent until a Master is seen.
         $this->WriteAttributeBoolean('MasterSeen', false);
+
+        // Drop any pending reliability resend from a previous configuration.
+        $this->stopResend();
 
         // Receive filter: promiscuous = everything, otherwise only 4BS (Device=165).
         if ($this->ReadPropertyBoolean('DebugPromiscuous')) {
@@ -352,6 +415,49 @@ class EltakoFWWKW71L extends IPSModule
         $this->WriteAttributeString('DetectPhase', '');
         $this->SetTimerInterval('DetectStop', 0);
         $this->finishDetect();
+    }
+
+    /**
+     * Reliability resend (driven by the ResendCheck timer): compare each channel's
+     * commanded target against the level the actor actually confirmed and resend the
+     * channel(s) that did not arrive. This catches the "only WW or only KW came on"
+     * failure from a dropped channel telegram during rapid off/on or RF congestion
+     * (e.g. a motion detector transmitting at the same instant).
+     *
+     * The target is always the *latest* command, so a quick off→on (or on→off) simply
+     * overrides the previous target — the resend can never revive a superseded state.
+     * With trusted feedback (EmulateStatus off) only the missing channel is resent;
+     * without it (EmulateStatus on) the resend repeats blindly for its retry budget.
+     */
+    public function ResendCheck(): void
+    {
+        $tries = $this->ReadAttributeInteger('ResendTries');
+        if ($tries <= 0) {
+            $this->stopResend();
+            return;
+        }
+
+        $resent = false;
+        foreach (['WW', 'KW'] as $channel) {
+            $desired = $this->ReadAttributeInteger($channel === 'KW' ? 'DesiredKW' : 'DesiredWW');
+            if ($desired < 0) {
+                continue; // no pending command for this channel
+            }
+            if ($this->confirmedLevel($channel) === $desired) {
+                continue; // actor already at the target
+            }
+            $this->txChannel($channel, $desired);
+            $resent = true;
+            $this->SendDebug('Resend ' . $channel, sprintf('desired=%d tries=%d', $desired, $tries), 0);
+        }
+
+        if (!$resent) {
+            $this->stopResend(); // every pending channel confirmed at its target
+            return;
+        }
+
+        $this->WriteAttributeInteger('ResendTries', $tries - 1);
+        $this->SetTimerInterval('ResendCheck', self::RESEND_DELAY_MS);
     }
 
     // =====================================================================
@@ -651,6 +757,11 @@ class EltakoFWWKW71L extends IPSModule
         }
         $this->txChannel($channel, $value);
 
+        // Latch the target and arm the reliability resend so a dropped channel
+        // telegram (rapid off/on, motion-detector RF collision) is corrected.
+        $this->WriteAttributeInteger($channel === 'KW' ? 'DesiredKW' : 'DesiredWW', $value);
+        $this->armResend();
+
         // Status emulation: reflect the command immediately when bidi feedback
         // is not trusted/available; otherwise the variable follows the actor.
         if ($this->ReadPropertyBoolean('EmulateStatus')) {
@@ -676,6 +787,37 @@ class EltakoFWWKW71L extends IPSModule
         $db1 = $this->channelByte($channel);
         $this->SendDebug('TX ' . $channel, sprintf('offset=%d pct=%d raw=%d', $offset, $value, $raw), 0);
         $this->sendTelegram($offset, $db3, $db2, $db1, self::DB0_CMD);
+    }
+
+    /** Arm (or re-arm) the reliability resend with a fresh retry budget. */
+    private function armResend(): void
+    {
+        $this->WriteAttributeInteger('ResendTries', self::RESEND_MAX_TRIES);
+        $this->SetTimerInterval('ResendCheck', self::RESEND_DELAY_MS);
+    }
+
+    /** Clear the resend state — target reached, superseded, or retries exhausted. */
+    private function stopResend(): void
+    {
+        $this->SetTimerInterval('ResendCheck', 0);
+        $this->WriteAttributeInteger('ResendTries', 0);
+        $this->WriteAttributeInteger('DesiredWW', -1);
+        $this->WriteAttributeInteger('DesiredKW', -1);
+    }
+
+    /**
+     * The level the actor has confirmed for a channel, used as ground truth for the
+     * reliability resend. With bidi feedback (the normal mode) the channel variable
+     * holds the actor's last confirmation. In status-emulation mode there is no
+     * independent confirmation — the variable just echoes the command — so report -1
+     * ("unknown"), which makes ResendCheck() repeat blindly for its retry budget.
+     */
+    private function confirmedLevel(string $channel): int
+    {
+        if ($this->ReadPropertyBoolean('EmulateStatus')) {
+            return -1;
+        }
+        return (int) $this->GetValue($channel);
     }
 
     /**

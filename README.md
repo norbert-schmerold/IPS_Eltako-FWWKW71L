@@ -147,18 +147,35 @@ Unter **Erweitert**:
   das „nicht durchgeführt" der Kachel, weil die Variable sofort reagiert.
 - *Debug* – alle eingehenden Telegramme ausgeben.
 
+**Zuverlässiges Schalten (automatisch):** EnOcean funkt ohne Quittung. Bei sehr
+schnellem Aus/Ein – oder wenn z. B. ein **Bewegungsmelder** im selben Moment funkt –
+kann eines der beiden Kanal-Telegramme verloren gehen, sodass **nur WW oder nur KW**
+angeht. Das Modul merkt sich deshalb kurz den zuletzt gesendeten Soll-Wert je Kanal
+und prüft nach ~0,7 s anhand der Rückmeldung nach; den **fehlenden Kanal sendet es
+automatisch nach** (bis zu zweimal). Maßgeblich ist immer der **zuletzt** gewünschte
+Zustand – ein schnelles Aus→Ein kann also nie eine veraltete Schaltung „wiederbeleben".
+
 ## Variablen (passend zur nativen „Licht"-Kachel)
 
-- **Status** (`~Switch`, An/Aus) – **Einschalten = immer Neutralweiß 100 %**
+Die Variablen nutzen die **modernen Darstellungen** (Slider/Schalter) statt der alten
+`~Intensity.*`-Profile. Die „Licht"-Kachel verteilt die Rollen über die **Verwendung**
+des Sliders: Sie zeigt als Helligkeit den Slider mit Verwendung **Intensität**, als
+Farbtemperatur den mit Farbtemperatur-Template und als An/Aus den Schalter. **Nur
+`Helligkeit`** trägt die Verwendung *Intensität* – `WW`/`KW` sind normale %-Slider
+(Verwendung *Standard*). Vorher hatten alle drei das Profil `~Intensity.100` (=
+Intensität), weshalb die Kachel die **Helligkeit von KW** statt der Gesamt-Helligkeit
+anzeigte.
+
+- **Status** (Schalter, An/Aus) – **Einschalten = immer Neutralweiß 100 %**
   (das Modul merkt sich keinen Zustand). Ausschalten = beide Kanäle aus.
-- **Helligkeit** (`~Intensity.100`) + **Farbtemperatur** (Slider mit
+- **Helligkeit** (Slider, Verwendung **Intensität**) + **Farbtemperatur** (Slider mit
   Farbtemperatur-Template, **auf 2700–6500 K begrenzt**) – CCT-Komfort über ein
   additives Mischmodell (`Helligkeit = max(WW,KW)`, verlustfreier Round-Trip mit
   WW/KW). Der Farbtemperatur-Slider bewegt sich in **100-K-Schritten** (Neutralweiß
   4600 K ist damit ein natürlicher Rastpunkt); die Variable selbst nimmt per
   Skript/`SetValue` **beliebige Werte (1 K)** an.
-- **Warmweiß** / **Kaltweiß** – die Kanäle einzeln direkt regelbar;
-  Helligkeit/Farbtemperatur folgen automatisch.
+- **Warmweiß** / **Kaltweiß** (Slider, Verwendung Standard) – die Kanäle einzeln
+  direkt regelbar; Helligkeit/Farbtemperatur folgen automatisch.
 
 **Kein Farb-Gedächtnis (bewusst):** Das Modul merkt sich **keinen** Zustand. Schaltet
 man aus dem **Aus** ein (Status-Schalter oder Helligkeit), kommt die Lampe als

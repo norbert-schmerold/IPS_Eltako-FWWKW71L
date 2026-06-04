@@ -50,16 +50,6 @@
             "caption": "{{INFO}}"
         },
         {
-            "type": "CheckBox",
-            "name": "RememberLastState",
-            "caption": "Letzten Zustand merken (beim Einschalten wiederherstellen; aus = beim Einschalten Neutralweiß 100 %)"
-        },
-        {
-            "type": "CheckBox",
-            "name": "RestoreOnLocalSwitch",
-            "caption": "Auch am Wandtaster: beim lokalen Einschalten letzten Zustand wiederherstellen (kann kurz aufblitzen, überstimmt lokales Voll-Einschalten)"
-        },
-        {
             "type": "ExpansionPanel",
             "caption": "Erweitert",
             "items": [
@@ -97,11 +87,6 @@
                     "type": "Button",
                     "caption": "Neutralweiß 100 %",
                     "onClick": "EFW_AllOn($id);"
-                },
-                {
-                    "type": "Button",
-                    "caption": "Letzter Zustand",
-                    "onClick": "EFW_RestoreLast($id);"
                 },
                 {
                     "type": "Button",

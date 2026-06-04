@@ -141,10 +141,6 @@ Pro physischem Aktor **eine** Instanz:
    abgeleiteten Adressen (Master/WW/KW).
 4. Fertig. Steuern und Status laufen, auch bei Bedienung am Aktor/Taster.
 
-**Letzten Zustand merken** (Checkbox): an = beim Einschalten (Status-Schalter)
-wird der zuletzt bekannte WW/KW-Zustand wiederhergestellt; aus = beim Einschalten
-**Neutralweiß 100 %**.
-
 Unter **Erweitert**:
 - *Status emulieren* – setzt die Werte **sofort beim Senden** (die echte Rückmeldung
   korrigiert sie anschließend). Empfohlen: verhindert das kurze „Zurückblitzen" und
@@ -153,9 +149,8 @@ Unter **Erweitert**:
 
 ## Variablen (passend zur nativen „Licht"-Kachel)
 
-- **Status** (`~Switch`, An/Aus) – beim Einschalten je nach Einstellung
-  **„Letzten Zustand merken"**: **ein** → zurück auf die zuletzt bekannten
-  WW/KW-Werte; **aus** → **Neutralweiß 100 %**.
+- **Status** (`~Switch`, An/Aus) – **Einschalten = immer Neutralweiß 100 %**
+  (das Modul merkt sich keinen Zustand). Ausschalten = beide Kanäle aus.
 - **Helligkeit** (`~Intensity.100`) + **Farbtemperatur** (Slider mit
   Farbtemperatur-Template, **auf 2700–6500 K begrenzt**) – CCT-Komfort über ein
   additives Mischmodell (`Helligkeit = max(WW,KW)`, verlustfreier Round-Trip mit
@@ -165,20 +160,15 @@ Unter **Erweitert**:
 - **Warmweiß** / **Kaltweiß** – die Kanäle einzeln direkt regelbar;
   Helligkeit/Farbtemperatur folgen automatisch.
 
-**Letzten Zustand merken / Neutralweiß:** Die Einstellung *„Letzten Zustand merken"*
-steuert das Einschalt-Verhalten (Status-Schalter in Symcon). Für „einfach wieder
-normales neutrales Licht" gibt es jederzeit **`EFW_AllOn`** (WW 100 % + KW 100 %);
-den gemerkten Zustand stellt **`EFW_RestoreLast`** wieder her – beide lassen sich an
-beliebige Symcon-Buttons/Ereignisse binden.
-
-**Wandtaster (lokales Einschalten):** Optionale Einstellung *„Auch am Wandtaster …"*.
-Ist sie **aus**, macht der Wandtaster genau das, was der Aktor tut (für „beim
-Einschalten letzter Wert" am Wandtaster die **Dimmwertspeicherung des Aktors** in
-PCT14 nutzen). Ist sie **an**, erkennt das Modul ein lokales Einschalten (OFF→ON, das
-es nicht selbst ausgelöst hat) und stellt den **gemerkten Zustand** wieder her – das
-funktioniert **ohne DAT71**, kann aber kurz aufblitzen (Aktor geht erst auf seinen
-Einschaltwert, dann zieht das Modul nach) und überstimmt ein absichtliches lokales
-Voll-Einschalten. Eigene Symcon-Befehle werden dabei ausgeblendet (kein Fehlauslösen).
+**Kein Farb-Gedächtnis (bewusst):** Das Modul merkt sich **keinen** Zustand. Schaltet
+man aus dem **Aus** ein (Status-Schalter oder Helligkeit), kommt die Lampe als
+**Neutralweiß** hoch; nach dem Ausschalten steht die Farbtemperatur wieder auf
+**neutral** (4600 K). Die **Farbtemperatur ist also nur eine Live-Einstellung** –
+sie wird einmal verstellt und gilt, solange die Lampe an ist. So kann die Farbe
+problemlos von einem **externen Modul** gesteuert werden (z. B. tagesabhängig /
+biorhythmisch) – am besten über `EFW_SetWW`/`EFW_SetKW` oder über
+Helligkeit + Farbtemperatur im Ein-Zustand. Für „einfach normales Licht" gibt es
+jederzeit **`EFW_AllOn`** (WW 100 % + KW 100 %).
 
 **Native Licht-Kachel:** In der Kachel-Visualisierung der Instanz die Darstellung
 **„Licht"** zuweisen → Status + Helligkeit + Farbtemperatur erscheinen in **einer**
@@ -190,9 +180,8 @@ Kachel.
 EFW_SetWW($InstanceID, $value);            // 0..100
 EFW_SetKW($InstanceID, $value);            // 0..100
 EFW_SetBoth($InstanceID, $ww, $kw);
-EFW_AllOn($InstanceID);                     // beide auf 100 %
+EFW_AllOn($InstanceID);                     // Neutralweiß 100 % (WW + KW)
 EFW_SwitchOff($InstanceID);
-EFW_RestoreLast($InstanceID);              // letzten gemerkten Zustand wiederherstellen
 EFW_TeachIn($InstanceID);                  // ein Teach-In für beide Kanäle
 EFW_PickFreeDeviceID($InstanceID);
 EFW_DetectMelde($InstanceID);              // Haupt-Melde-ID automatisch erkennen

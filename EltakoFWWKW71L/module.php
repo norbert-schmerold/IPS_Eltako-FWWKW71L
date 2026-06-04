@@ -86,10 +86,6 @@ class EltakoFWWKW71L extends IPSModule
 
     /** Melde-ID detection: per-channel probe window in milliseconds (WW then KW). */
     private const DETECT_PHASE_MS = 5000;
-    /** Local-switch restore: how long our own commands suppress the restore (seconds). */
-    private const SUPPRESS_SECONDS = 5;
-    /** Local-switch restore: debounce to batch the WW+KW burst (milliseconds). */
-    private const LOCAL_RESTORE_DEBOUNCE_MS = 500;
 
     /**
      * Colour-temperature endpoints (Kelvin) for the standard ~TWColor slider used
@@ -113,10 +109,6 @@ class EltakoFWWKW71L extends IPSModule
         $this->RegisterPropertyString('MeldeID', '');      // bidi feedback base ID (hex)
         $this->RegisterPropertyBoolean('EmulateStatus', false);
         $this->RegisterPropertyBoolean('DebugPromiscuous', false);
-        // When on, switching on restores the last WW/KW state; off = neutral 100 %.
-        $this->RegisterPropertyBoolean('RememberLastState', true);
-        // When on, a local wall-button switch-on also restores the last state.
-        $this->RegisterPropertyBoolean('RestoreOnLocalSwitch', false);
 
         // --- Runtime state ---
         $this->RegisterAttributeBoolean('DetectActive', false);
@@ -125,14 +117,6 @@ class EltakoFWWKW71L extends IPSModule
         // Latched once the hi-res Master telegram (Haupt+4) is seen → ignore the
         // redundant percent telegrams from then on (reset on ApplyChanges).
         $this->RegisterAttributeBoolean('MasterSeen', false);
-        // Local-switch restore state machine: last settled on/off, suppress-until
-        // timestamp (our own commands), and a pending debounced restore.
-        $this->RegisterAttributeBoolean('OnState', false);
-        $this->RegisterAttributeInteger('SuppressUntil', 0);
-        $this->RegisterAttributeBoolean('PendingRestore', false);
-        // Last non-zero brightness per channel, restored when switching on.
-        $this->RegisterAttributeInteger('Last_WW', 100);
-        $this->RegisterAttributeInteger('Last_KW', 100);
 
         // --- Variables ---
         // CCT comfort controls (compute WW/KW) plus the raw channels (fully adjustable).
@@ -166,7 +150,6 @@ class EltakoFWWKW71L extends IPSModule
 
         // --- Timers ---
         $this->RegisterTimer('DetectStop', 0, 'EFW_StopDetectMelde($_IPS[\'TARGET\']);');
-        $this->RegisterTimer('LocalRestore', 0, 'EFW_FireLocalRestore($_IPS[\'TARGET\']);');
 
         $this->ConnectParent(self::GATEWAY_MODULE_GUID);
     }
@@ -192,13 +175,6 @@ class EltakoFWWKW71L extends IPSModule
         } else {
             $this->SetReceiveDataFilter('.*"Device":' . self::RORG_4BS . '.*');
         }
-
-        // Seed the local-switch state machine from the current variables and suppress
-        // the restore during the startup sync (so the status request below is not
-        // mistaken for a local switch-on).
-        $this->WriteAttributeBoolean('OnState', $this->GetValue('WW') > 0 || $this->GetValue('KW') > 0);
-        $this->WriteAttributeBoolean('PendingRestore', false);
-        $this->suppressRestore();
 
         // Sync the variables to the actor's actual state when the gateway is ready.
         if ($this->ReadPropertyInteger('DeviceID') > 0 && $this->HasActiveParent()) {
@@ -319,38 +295,6 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Restore the last remembered WW/KW state (the "memory"). Bind this to any Symcon
-     * button or event. Falls back to 100 % per channel if nothing is remembered yet.
-     */
-    public function RestoreLast(): void
-    {
-        $ww = $this->ReadAttributeInteger('Last_WW');
-        $kw = $this->ReadAttributeInteger('Last_KW');
-        $this->SetBoth($ww > 0 ? $ww : 100, $kw > 0 ? $kw : 100);
-    }
-
-    /**
-     * Timer handler for the debounced local-switch restore. Fires once the WW+KW
-     * burst of a wall-button switch-on has settled and restores the remembered state.
-     */
-    public function FireLocalRestore(): void
-    {
-        $this->SetTimerInterval('LocalRestore', 0);
-        if (!$this->ReadAttributeBoolean('PendingRestore')) {
-            return;
-        }
-        $this->WriteAttributeBoolean('PendingRestore', false);
-        // A command issued in the meantime (Symcon) takes precedence — don't override it.
-        if (time() < $this->ReadAttributeInteger('SuppressUntil')) {
-            return;
-        }
-        if ($this->ReadPropertyBoolean('RestoreOnLocalSwitch')) {
-            $this->SendDebug('LocalRestore', 'restoring last state', 0);
-            $this->RestoreLast();
-        }
-    }
-
-    /**
      * Auto-detect the Melde-ID by actively driving each channel and recording the
      * address the actor confirms from — no manual button toggling needed.
      *
@@ -426,8 +370,9 @@ class EltakoFWWKW71L extends IPSModule
                 $this->recomputeCct();
                 break;
             case 'Helligkeit':
-                // Brightness keeps the current/last colour temperature (also when
-                // coming on from off), so the light returns to its last colour.
+                // The module keeps no colour memory: while off the colour is reset to
+                // neutral, so brightness from off comes on as neutral white. While on,
+                // the current colour temperature is used.
                 $this->applyCct((int) $Value, $this->kelvinToTemp((int) $this->GetValue('Farbtemperatur')));
                 break;
             case 'Farbtemperatur':
@@ -436,11 +381,7 @@ class EltakoFWWKW71L extends IPSModule
                 break;
             case 'Status':
                 if ((bool) $Value) {
-                    if ($this->ReadPropertyBoolean('RememberLastState')) {
-                        $this->RestoreLast();          // back to the remembered WW/KW
-                    } else {
-                        $this->SetBoth(100, 100);      // neutral white, full
-                    }
+                    $this->SetBoth(100, 100);          // always on as neutral white, full
                 } else {
                     $this->SwitchOff();
                 }
@@ -692,14 +633,6 @@ class EltakoFWWKW71L extends IPSModule
         $this->SendDebug('DetectMelde', 'picked Haupt ' . $hex, 0);
     }
 
-    /** Remember a channel's last non-zero brightness (for the Status-on restore). */
-    private function rememberLast(string $channel, int $value): void
-    {
-        if ($value > 0) {
-            $this->WriteAttributeInteger('Last_' . $channel, $value);
-        }
-    }
-
     /**
      * Send a dim command for one channel and optionally reflect the value
      * immediately (status emulation).
@@ -716,7 +649,6 @@ class EltakoFWWKW71L extends IPSModule
             $this->SendDebug('TX ' . $channel, 'no Geräte-ID set, ignored', 0);
             return;
         }
-        $this->rememberLast($channel, $value);
         $this->txChannel($channel, $value);
 
         // Status emulation: reflect the command immediately when bidi feedback
@@ -729,7 +661,7 @@ class EltakoFWWKW71L extends IPSModule
 
     /**
      * Encode and send a hi-res dim command for one channel — the wire-level part of
-     * setChannel(), shared with the detection probe. No variable/Last_* side effects.
+     * setChannel(), shared with the detection probe. No variable side effects.
      */
     private function txChannel(string $channel, int $value): void
     {
@@ -738,8 +670,6 @@ class EltakoFWWKW71L extends IPSModule
         if ($offset <= 0) {
             return;
         }
-        // Our own command → don't let the resulting feedback look like a local on.
-        $this->suppressRestore();
         $raw = (int) round($value * self::VALUE_MAX / 100);
         $db3 = ($raw >> 8) & 0xFF;   // high 2 bits
         $db2 = $raw & 0xFF;          // low byte
@@ -759,40 +689,17 @@ class EltakoFWWKW71L extends IPSModule
         if ($offset <= 0) {
             return;
         }
-        // A status request triggers a confirmation that reflects the current state —
-        // not a local switch-on, so suppress the restore for its feedback.
-        $this->suppressRestore();
         $this->SendDebug('TX status request', 'offset=' . $offset, 0);
         $this->sendTelegram($offset, 0x00, 0x00, self::DB1_STATUS_REQUEST, self::DB0_CMD);
     }
 
     /**
-     * Apply a confirmed channel state reported by the actor.
-     *
-     * Optional local-switch restore: when the actor reports an OFF→ON edge that we
-     * did NOT command (a wall-button switch-on), restore the remembered state instead
-     * of the actor's on-value. The WW+KW burst is batched via a debounce timer, and
-     * the on-edge telegrams are deliberately not applied (no SetValue, no rememberLast)
-     * so the remembered value survives and the 100 %-flash stays short.
+     * Apply a confirmed channel state reported by the actor. The module keeps no
+     * memory of the state — it simply reflects what the actor reports.
      */
     private function applyFeedback(string $channel, int $level, bool $on): void
     {
         $value = $on ? $level : 0;
-
-        if ($this->ReadPropertyBoolean('RestoreOnLocalSwitch')
-            && !$this->ReadAttributeBoolean('DetectActive')
-            && time() >= $this->ReadAttributeInteger('SuppressUntil')
-            && !$this->ReadAttributeBoolean('OnState')) {
-            $other = (int) $this->GetValue($channel === 'WW' ? 'KW' : 'WW');
-            if ($value > 0 || $other > 0) {
-                $this->WriteAttributeBoolean('PendingRestore', true);
-                $this->SetTimerInterval('LocalRestore', self::LOCAL_RESTORE_DEBOUNCE_MS);
-                $this->SendDebug('RX feedback ' . $channel, 'local switch-on → restore queued', 0);
-                return;
-            }
-        }
-
-        $this->rememberLast($channel, $value);
         $this->SetValue($channel, $value);
         $this->recomputeStatus();
         $this->recomputeCct();
@@ -836,17 +743,6 @@ class EltakoFWWKW71L extends IPSModule
     {
         $on = $this->GetValue('WW') > 0 || $this->GetValue('KW') > 0;
         $this->SetValue('Status', $on);
-        // Settled on/off state for the local-switch edge detection.
-        $this->WriteAttributeBoolean('OnState', $on);
-    }
-
-    /**
-     * Mark a short window during which incoming feedback is NOT treated as a local
-     * wall-button switch-on — used after we send a command (or sync) ourselves.
-     */
-    private function suppressRestore(): void
-    {
-        $this->WriteAttributeInteger('SuppressUntil', time() + self::SUPPRESS_SECONDS);
     }
 
     /**
@@ -872,12 +768,15 @@ class EltakoFWWKW71L extends IPSModule
         $this->SetWW($ww);
         $this->SetKW($kw);
         $this->SetValue('Helligkeit', $b);
-        $this->SetValue('Farbtemperatur', $this->tempToKelvin($t));
+        // No colour memory: while off the colour is shown as neutral white, so the
+        // next switch-on comes on neutral.
+        $this->SetValue('Farbtemperatur', $this->tempToKelvin($b > 0 ? $t : 50));
     }
 
     /**
      * Derive the CCT variables from the current WW/KW values (inverse of applyCct).
-     * Keeps the last colour temperature while the light is off (B = 0).
+     * While off (B = 0) the colour resets to neutral white — the module keeps no
+     * colour memory; an external CCT/circadian module can drive the colour when on.
      */
     private function recomputeCct(): void
     {
@@ -888,6 +787,8 @@ class EltakoFWWKW71L extends IPSModule
         if ($b > 0) {
             $t = $ww >= $kw ? (int) round($kw / $ww * 50) : (int) round(100 - $ww / $kw * 50);
             $this->SetValue('Farbtemperatur', $this->tempToKelvin($t));
+        } else {
+            $this->SetValue('Farbtemperatur', $this->tempToKelvin(50));
         }
     }
 

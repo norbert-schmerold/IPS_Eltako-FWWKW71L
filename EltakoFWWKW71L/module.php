@@ -426,6 +426,8 @@ class EltakoFWWKW71L extends IPSModule
                 $this->recomputeCct();
                 break;
             case 'Helligkeit':
+                // Brightness keeps the current/last colour temperature (also when
+                // coming on from off), so the light returns to its last colour.
                 $this->applyCct((int) $Value, $this->kelvinToTemp((int) $this->GetValue('Farbtemperatur')));
                 break;
             case 'Farbtemperatur':

@@ -7,10 +7,17 @@ Das native Symcon-Modul ist defekt: es wertet die Bestätigungs-Telegramme des
 Aktors nicht aus (unabhängig von der eingetragenen ReturnID). Dieses Modul baut
 den Hardware-Treiber neu auf und liest die Rückmeldungen selbst.
 
+> ⚠️ **Hinweis / Haftungsausschluss:** Dieses Modul – Code **und** Dokumentation –
+> wurde **mit KI (Anthropic Claude)** erstellt. Es entstand für den privaten
+> Eigengebrauch und ist **ohne Gewähr**. **Es wird keinerlei Haftung übernommen**
+> für Schäden, Fehlfunktionen, Sachschäden oder Datenverlust, die aus der Nutzung
+> entstehen. Einsatz auf eigene Gefahr – vor dem produktiven Einsatz selbst prüfen
+> und testen.
+
 > **Status: funktionsfähig.** Telegramm-Aufbau gegen die offizielle Eltako-Doku
 > („Inhalte der Eltako-Funktelegramme", freies Profil 07-3F-7F) **und** gegen
-> Live-Mitschnitte verifiziert: Senden, Status-Auswertung (beide
-> Rückmelde-Formate, automatisch erkannt), Teach-In, Rausch-Filterung.
+> Live-Mitschnitte verifiziert: Senden, Status-Auswertung (hochauflösend + Prozent),
+> Teach-In, automatische Melde-ID-Erkennung, Rausch-Filterung.
 
 ## Architektur
 
@@ -31,35 +38,26 @@ es gibt keinen Prozent-Befehl. **Eine** Geräte-ID (Sende-Offset), Kanal im Byte
 | `DataByte1` | Kanal: `0x10` = WW, `0x11` = KW (`0x02` = Status anfordern) |
 | `DataByte0` | `0x0F` (GFVS-Master) |
 
-- **Teach-In** (Profil 07-3F-7F): `DataByte3..0 = FF F8 0D 87`. Am Aktor den
-  **oberen** Drehschalter auf die GFVS-Einlernfunktion **9** (hochauflösende
-  Dimmwerte) bzw. **10** (GFVS mit Bestätigungs-Telegramm) und den **mittleren**
-  auf **LRN** stellen, dann *Einlernen*.
+- **Teach-In** (Profil 07-3F-7F): `DataByte3..0 = FF F8 0D 87`.
 
-### Empfang (Rückmeldung) – Format wird automatisch erkannt
+### Empfang (Rückmeldung) – Haupt-Melde-ID + Kanaloffset
 
-Je nach Aktor-Einstellung „Dimmwert in % senden" kommt die Bestätigung in einem
-von zwei Formaten – das Modul **erkennt beide automatisch** und zeigt das
-erkannte Format im Formular an:
+Der Aktor meldet von fortlaufenden Offsets auf seiner **Haupt-Melde-ID** (das ist
+genau die „Rückmelde-ID", die PCT14 als `FF F0 09 80 + Kanalnummer` anzeigt). Im
+Modul trägst du nur die **Haupt-ID** ein (z. B. `FFF00980`); die Kanaladressen
+rechnet das Modul selbst:
 
-- **Hochauflösend**: `DataByte1` = Kanal (`0x10`/`0x11`), `DataByte0 = 0x0E`,
-  Wert 10-Bit in `DataByte3:DataByte2`. **Eine** Melde-ID.
-- **Prozent**: `DataByte3 = 0x02`, `DataByte2` = `0…100 %`, `DataByte0` =
-  `0x09`/`0x08`. Kanal über die **ID** – der Aktor sendet ab seiner Base-ID:
-  WW = **Base ID+1** (= Melde-ID), KW = Base ID+2 (= Melde-ID + 1). Als Melde-ID
-  zählt die **WW-Adresse (Base ID+1)**.
+| Adresse | Format | Inhalt |
+| --- | --- | --- |
+| **Haupt + 4** (Master) | hochauflösend: `DataByte0=0x0E`, Kanal in `DataByte1` (`0x10`/`0x11`), 10-Bit-Wert in `DataByte3:DataByte2` | **beide Kanäle**, 10-Bit – **bevorzugt** |
+| **Haupt + 1** | Prozent: `DataByte3=0x02`, `DataByte2 = 0…100 %`, `DataByte0` = `0x09`/`0x08` | WW – Fallback |
+| **Haupt + 2** | Prozent (wie oben) | KW – Fallback |
 
-> **Master-Telegramm:** Zusätzlich sendet der Aktor ein **Master-Telegramm**
-> (Base ID+4, z. B. `FFF00984`) – und zwar im **hochauflösenden** Format, auch
-> wenn die Kanäle Prozent melden. Eine reine Status-Abfrage löst **nur** dieses
-> Master-Telegramm aus, nicht die Kanäle. Deshalb wertet die Melde-ID-Erkennung
-> die **echten Kanal-Rückmeldungen beim Schalten** aus (siehe Einrichtung) und
-> bevorzugt die Prozent-Adresse (`Base ID+1`) gegenüber dem hochauflösenden
-> Master. Das Master-Telegramm wird im Normalbetrieb ignoriert.
-
-Drei GUIDs mit unterschiedlichen Rollen (gemäß
-[Symcon-Datenfluss-Doku](https://www.symcon.de/de/service/dokumentation/entwicklerbereich/sdk-tools/sdk-php/datenfluss/)
-und [ConnectParent](https://www.symcon.de/de/service/dokumentation/entwicklerbereich/sdk-tools/sdk-php/module/connectparent/)):
+Das Modul nimmt automatisch das beste: Sobald das **hochauflösende Master-Telegramm**
+(`Haupt+4`) gesehen wird, „rastet" es darauf ein und ignoriert die redundanten
+Prozent-Telegramme. Sendet ein Aktor **nur** das Prozent-Telegramm, wird dieses
+genutzt. Damit läuft das Modul mit beliebiger Aktor-Einstellung – **eines** der
+Rückmelde-Telegramme genügt.
 
 | GUID | Rolle | Wo |
 | --- | --- | --- |
@@ -67,11 +65,56 @@ und [ConnectParent](https://www.symcon.de/de/service/dokumentation/entwicklerber
 | `{70E3075F-A35D-4DEB-AC20-C929A156FE48}` | **Daten-Interface** Device → Gateway (Senden), DataID | `parentRequirements` + Payload-`DataID` |
 | `{DE2DA2C0-7A28-4D23-A9AA-6D1C7609C7EC}` | **Daten-Interface** Gateway → Device (Empfang) | `implemented` |
 
-`ConnectParent` erwartet laut Doku eine **Modul-ID**, nicht die Interface-GUID;
-`parentRequirements`/`implemented` enthalten dagegen die **Datenpakettyp-GUIDs**.
-GUIDs und Telegramm-Feldnamen (`Device`, `DeviceID`, `DestinationID`,
-`DataLength`, `DataByte3..0`) gegen die nativen EnOcean-Gerätemodule verifiziert
-(Referenz: [nefiertsrebliS/MoreEnoceanFeatures](https://github.com/nefiertsrebliS/MoreEnoceanFeatures)).
+## Aktor-Einstellungen am FWWKW71L
+
+Das Modul ist bewusst genügsam: **mit dem Einlernen über die Drehschalter läuft es
+auch ohne DAT71/PCT14.** Ein DAT71 ist nur zum Optimieren nötig – nicht jeder hat einen.
+
+### 1. Einlernen über die Drehschalter (Pflicht, ohne DAT71)
+
+Der Aktor hat drei Drehschalter:
+
+- **Oberer (Einlern-Funktionswahl):** auf **10** = „Drehtaster und GFVS". Diese
+  Position aktiviert beim Einlernen automatisch das **Bestätigungs-/Rückmelde­telegramm**
+  – dadurch funktioniert die Rückmeldung in Symcon **ohne DAT71**.
+  (Position **9** = „GFVS hochauflösende Dimmwerte" geht ebenfalls, sendet aber ggf.
+  keine automatische Bestätigung; dann die Rückmeldung per DAT71 aktivieren –
+  siehe unten. **Nicht** Position 8.)
+- **Mittlerer:** zum Einlernen auf **LRN**, danach zurück auf die gewünschte
+  **Mindesthelligkeit (%)** (nicht auf LRN/CLR stehen lassen).
+- **Unterer:** **Dimmgeschwindigkeit** 1…6 (nicht OFF).
+
+Ablauf: oberen → **10**, mittleren → **LRN**, im Modul *Einlernen* klicken, dann
+mittleren zurück auf **%**. (Reset/CLR: mittleren auf CLR, oberen 8× zum
+Linksanschlag drehen.)
+
+### 2. Rückmeldung (Pflicht – eines genügt)
+
+Das Modul versteht **beide** Rückmelde-Formate und wählt automatisch das beste:
+
+- **Hochauflösendes „Dimmerwerttelegramm"** (Master, `Haupt+4`) – bevorzugt.
+- **„Bestätigungstelegramm mit %-Dimmwert"** (`Haupt+1`/`+2`) – Fallback.
+
+Solange der Aktor **mindestens eines** davon sendet (per Drehschalter-10 automatisch
+aktiv), bekommst du Rückmeldung. **Die %-Bestätigung musst du nicht extra
+einschalten** – lässt du sie aus, wird nur das hochauflösende Telegramm genutzt.
+
+### 3. PCT14/DAT71 (optional, nur zum Optimieren)
+
+| Einstellung | Pflicht? | Empfehlung |
+| --- | --- | --- |
+| **Dimmerwerttelegramm** | – | **ein** → garantiert das hochauflösende Master-Telegramm (das das Modul bevorzugt) |
+| **Bestätigungstelegramm mit %-Dimmwert** | nein | **kann AUS** bleiben – das Modul nutzt das hochauflösende; an = nur Fallback + mehr Funk-Traffic |
+| **Bestätigungstelegramm mit Tastertelegramm** | nein | **AUS** – das Modul ignoriert die RPS-Tastertelegramme (`Device 246`), reines Funk-Rauschen |
+| **Betriebsart** | – | **Drehschalter** (Normalbetrieb) |
+| **PWM-Frequenz** | nein | hoch (1–4 kHz) gegen Flackern/Brummen |
+| **Mindesthelligkeit** | nein | nach Geschmack (unteres Dimm-Ende nutzbar machen) |
+| **Verhalten nach Spannungsausfall (Memory)** / **Dimmwertspeicherung** | nein | bei Bedarf, damit der Aktor beim lokalen Einschalten den letzten Wert nimmt (statt 100 %) |
+
+> Die **„Rückmelde-ID (Hex)"** in PCT14 – z. B. `FF F0 09 80 + Kanalnummer` – ist
+> genau die **Haupt-Melde-ID**, die du im Modul einträgst (ohne Kanalnummer, also
+> `FFF00980`). Das Modul leitet die Kanaladressen (`+1` WW, `+2` KW, `+4` Master)
+> selbst ab.
 
 ## Installation
 
@@ -83,36 +126,41 @@ GUIDs und Telegramm-Feldnamen (`Device`, `DeviceID`, `DestinationID`,
 
 ## Einrichtung
 
-Pro physischem Aktor **eine** Instanz. Die Konfiguration ist bewusst minimal –
-Senden ist immer hochauflösend, das Empfangsformat wird automatisch erkannt:
+Pro physischem Aktor **eine** Instanz:
 
 1. **Geräte-ID** setzen. Ersetzt du das Original-Modul, dieselbe Geräte-ID
-   eintragen (z. B. `36`) – dann ist der Aktor schon eingelernt. Für ein neues
-   Gerät *Freie Geräte-ID wählen* klicken.
-2. **Einlernen** (nur neues Gerät): am Aktor den **oberen Drehschalter auf 9**
-   (GFVS hochauflösend) bzw. **10** (GFVS mit Bestätigung) und den **mittleren
-   auf LRN** stellen, dann *Einlernen* klicken. Danach mittleren zurück auf die
-   gewünschte Mindesthelligkeit (`%`).
-3. **Melde-ID** ermitteln: *Automatisch erkennen* klicken. Das Modul steuert
-   **Warmweiß und Kaltweiß kurz nacheinander an** und übernimmt je Kanal die
-   Adresse, von der der Aktor bestätigt – die WW-Adresse landet im Feld. Der
-   Aktor muss dafür eingelernt sein und Bestätigungen senden. (Alternativ
-   *Suchen*, Aktor schalten, niedrigste Adresse übernehmen – oder die Melde-ID
-   direkt eintragen.) Danach **speichern**.
-4. Fertig. Das Formular zeigt das **erkannte Empfangsformat** (hochauflösend
-   oder Prozent). Steuern/Status laufen, auch bei Taster-Bedienung des Aktors.
+   eintragen – dann ist der Aktor schon eingelernt. Für ein neues Gerät
+   *Freie Geräte-ID wählen* klicken (sucht die niedrigste freie Sende-ID über alle
+   EnOcean-Geräte am selben Gateway).
+2. **Einlernen** (nur neues Gerät): am Aktor oberen Drehschalter auf **10** (bzw. 9),
+   mittleren auf **LRN**, dann *Einlernen* klicken; mittleren zurück auf **%**.
+3. **Melde-ID (Haupt)** ermitteln: *Automatisch erkennen* klicken – das Modul steuert
+   Warmweiß und Kaltweiß kurz nacheinander an und trägt die **Haupt-Melde-ID** ein.
+   Alternativ die **„Rückmelde-ID"** aus PCT14 ohne Kanalnummer direkt eintragen
+   (z. B. `FFF00980`). Danach **speichern**. Das Formular zeigt zur Kontrolle die
+   abgeleiteten Adressen (Master/WW/KW).
+4. Fertig. Steuern und Status laufen, auch bei Bedienung am Aktor/Taster.
 
-Unter **Erweitert**: *Status emulieren* (Werte sofort aus gesendeten Befehlen
-setzen) und *Debug* (alle Telegramme ausgeben).
+Unter **Erweitert**:
+- *Status emulieren* – setzt die Werte **sofort beim Senden** (die echte Rückmeldung
+  korrigiert sie anschließend). Empfohlen: verhindert das kurze „Zurückblitzen" und
+  das „nicht durchgeführt" der Kachel, weil die Variable sofort reagiert.
+- *Debug* – alle eingehenden Telegramme ausgeben.
 
-## Verifikation
+## Variablen (passend zur nativen „Licht"-Kachel)
 
-GUIDs, Feldnamen und der komplette Telegramm-Aufbau (Befehl, beide
-Rückmelde-Formate, Teach-In `FF F8 0D 87`, Status-Anforderung `DataByte1=0x02`)
-sind gegen die offizielle Eltako-Doku **„Inhalte der Eltako-Funktelegramme"**
-(freies Profil 07-3F-7F) und gegen Live-Mitschnitte verifiziert. Eine
-Offline-Testsuite (gestubbtes `IPSModule`) prüft Encoding/Decoding beider
-Formate, CCT-Round-Trip, Teach-In und die Melde-ID-Erkennung.
+- **Status** (`~Switch`, An/Aus) – schaltet beim Einschalten auf die **zuletzt**
+  bekannte Helligkeit je Kanal zurück (nicht stur 100 %).
+- **Helligkeit** (`~Intensity.100`) + **Farbtemperatur** (Slider mit
+  Farbtemperatur-Template, **auf 2700–6500 K begrenzt**) – CCT-Komfort über ein
+  additives Mischmodell (`Helligkeit = max(WW,KW)`, verlustfreier Round-Trip mit
+  WW/KW). Der Farbtemperatur-Slider **rastet bei 4600 K** (neutralweiß) ein.
+- **Warmweiß** / **Kaltweiß** – die Kanäle einzeln direkt regelbar;
+  Helligkeit/Farbtemperatur folgen automatisch.
+
+**Native Licht-Kachel:** In der Kachel-Visualisierung der Instanz die Darstellung
+**„Licht"** zuweisen → Status + Helligkeit + Farbtemperatur erscheinen in **einer**
+Kachel.
 
 ## Public-API (für künftige Erweiterungs-Layer)
 
@@ -124,36 +172,35 @@ EFW_AllOn($InstanceID);                     // beide auf 100 %
 EFW_SwitchOff($InstanceID);
 EFW_TeachIn($InstanceID);                  // ein Teach-In für beide Kanäle
 EFW_PickFreeDeviceID($InstanceID);
-EFW_DetectMelde($InstanceID);              // Melde-ID automatisch erkennen
+EFW_DetectMelde($InstanceID);              // Haupt-Melde-ID automatisch erkennen
 EFW_StartDiscovery($InstanceID);
 EFW_StopDiscovery($InstanceID);
 EFW_AdoptDiscovered($InstanceID, $hexId);  // -> Melde-ID
 ```
 
-Variablen (alle bedienbar) – passend zur nativen **„Licht"-Kachel** von Symcon:
-- **Status** (`~Switch`, An/Aus) – schaltet beim Einschalten auf die **zuletzt**
-  bekannte Helligkeit je Kanal zurück (nicht stur 100 %).
-- **Helligkeit** (`~Intensity.100`) + **Farbtemperatur** (neue Slider-Darstellung
-  mit Farbtemperatur-Template, **auf 2700–6500 K begrenzt** – den tatsächlich
-  einstellbaren Bereich) – CCT-Komfort, setzen WW/KW über ein additives
-  Mischmodell: `Helligkeit = max(WW,KW)`. Verlustfreier Round-Trip mit WW/KW.
-- **Warmweiß** / **Kaltweiß** – die Kanäle weiterhin einzeln direkt regelbar;
-  Helligkeit/Farbtemperatur folgen automatisch.
+## Verifikation
 
-**Native Licht-Kachel:** Die Variablen nutzen genau die Darstellungen, die
-Symcons „Licht"-Objektdarstellung erwartet (Status = Schalter/An-Aus, Helligkeit
-= Schieberegler/Intensität, Farbtemperatur = Schieberegler/Farbtemperatur). In
-der Kachel-Visualisierung der Instanz die Darstellung **„Licht"** zuweisen →
-Status + Helligkeit + Farbtemperatur erscheinen in **einer** Kachel.
+GUIDs, Feldnamen und der Telegramm-Aufbau (Befehl, beide Rückmelde-Formate,
+Teach-In `FF F8 0D 87`, Status-Anforderung `DataByte1=0x02`) sind gegen die
+offizielle Eltako-Doku **„Inhalte der Eltako-Funktelegramme"** (freies Profil
+07-3F-7F) und gegen **Live-Mitschnitte** verifiziert. Die Haupt-Melde-ID-Struktur
+(`Haupt+1` WW, `+2` KW, `+4` Master, beide Kanäle in `DataByte1`) wurde aus einem
+echten Mitschnitt (`base FFF00980`) und der PCT14-Anzeige (`FF F0 09 80 +
+Kanalnummer`) bestätigt.
 
-Komfort:
-- **Rückmeldeadresse automatisch erkennen**: steuert WW und KW kurz nacheinander
-  an und übernimmt je Kanal die Adresse, von der der Aktor bestätigt – im
-  Prozent-Modus eindeutig der WW-Basis zugeordnet (kein Raten der niedrigsten ID).
+## Danksagung / Credits
 
-Geplante Layer (bewusst **nicht** in diesem Modul): CCT-Komfort, Lichtszenen,
-Schlummer/Lichtwecker, Astro, Bidi-Watchdog. Die API hält dafür typisierte,
-magic-freie Einstiegspunkte bereit.
+- **Eltako** – Telegramm-Profil 07-3F-7F (offizielle Doku „Inhalte der
+  Eltako-Funktelegramme") und PCT14/DAT71.
+- **[nefiertsrebliS/MoreEnoceanFeatures](https://github.com/nefiertsrebliS/MoreEnoceanFeatures)**
+  – Referenz für die Symcon-EnOcean-Integration. Die Funktion *„niedrigste freie
+  Geräte-ID am Gateway"* (`EFW_PickFreeDeviceID`) ist der dortigen `FreeDeviceID()`
+  **nachempfunden**; GUIDs und Telegramm-Feldnamen (`Device`, `DeviceID`,
+  `DataLength`, `DataByte…`) wurden gegen dieses Projekt und die nativen
+  Symcon-EnOcean-Module abgeglichen. **Props an nefiertsrebliS.**
+
+> Es wurde **kein** Code 1:1 aus anderen Modulen kopiert; die genannten Stellen sind
+> eigenständige Nachbauten bzw. Referenzen.
 
 ## Lizenz
 

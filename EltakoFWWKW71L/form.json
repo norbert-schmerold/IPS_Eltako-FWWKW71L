@@ -31,7 +31,7 @@
                 {
                     "type": "ValidationTextBox",
                     "name": "MeldeID",
-                    "caption": "Melde-ID (hex)"
+                    "caption": "Melde-ID (Haupt, hex)"
                 },
                 {
                     "type": "Button",
@@ -42,7 +42,7 @@
         },
         {
             "type": "Label",
-            "caption": "Tipp: „Automatisch erkennen\" klicken – das Modul steuert Warmweiß und Kaltweiß kurz nacheinander an und übernimmt die Melde-ID automatisch (Aktor muss eingelernt sein und Bestätigungen senden)."
+            "caption": "Haupt-Melde-ID = die „Rückmelde-ID\" des Aktors (PCT14), ohne Kanalnummer – z. B. FFF00980. Das Modul liest darüber den Master (Haupt+4). „Automatisch erkennen\" klicken – das Modul steuert WW/KW kurz an und trägt die Haupt-ID ein (Aktor eingelernt, Dimmerwerttelegramm ein)."
         },
         {
             "type": "Label",

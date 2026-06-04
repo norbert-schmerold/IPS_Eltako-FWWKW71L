@@ -41,20 +41,24 @@ class EltakoFWWKW71L extends IPSModule
     /** RORG 4BS (0xA5). */
     private const RORG_4BS = 165;
 
-    // --- Telegram formats (the actor's "Dimmwert in % senden" PCT14 setting) ---
-    /** Percentage format: DataByte2 = 0..100, two consecutive Melde-/Sender-IDs. */
-    private const FORMAT_PERCENT = 'percent';
-    /** High-resolution format: 10-bit value, channel in DataByte1, single ID. */
-    private const FORMAT_HIRES = 'hires';
+    // --- Feedback addressing (verified against live sniffs, base 0xFFF00980) ---
+    // The actor reports from consecutive offsets on its own base ("Haupt-Melde-ID"):
+    //   +1 = WW (percent), +2 = KW (percent), +4 = hi-res Master (BOTH channels,
+    //   channel in DataByte1). The Master is emitted in every configuration (also
+    //   with "Dimmwert in % senden" off), carries both channels and is 10-bit
+    //   precise, so it is the preferred feedback source; the percent telegrams are a
+    //   fallback for actors that only send the % "Bestätigungstelegramm".
+    private const MELDE_OFF_WW = 1;
+    private const MELDE_OFF_KW = 2;
+    private const MELDE_OFF_MASTER = 4;
 
-    // Percentage format bytes.
+    // Percent telegram bytes (used only by Melde-ID detection as a fallback).
     /** DataByte3 marker of a percentage dim telegram. */
     private const DB3_DIM = 0x02;
     /** DataByte0 on/off for the percentage format. */
     private const DB0_ON = 0x09;
     private const DB0_OFF = 0x08;
 
-    // High-resolution format.
     /**
      * High-resolution dim value is 10-bit (0..1023), split across two bytes:
      * DataByte3 = high 2 bits, DataByte2 = low byte. 1023 = 100 %.
@@ -63,7 +67,8 @@ class EltakoFWWKW71L extends IPSModule
     /** Channel selector in DataByte1 (verified): WW = 0x10, KW = 0x11. */
     private const DB1_WW = 0x10;
     private const DB1_KW = 0x11;
-    /** DataByte0 of an outgoing hi-res command (the actor confirms with 0x0E). */
+    /** DataByte0 marks a confirmation (0x0E) vs an outgoing command/echo (0x0F). */
+    private const DB0_CONFIRM = 0x0E;
     private const DB0_CMD = 0x0F;
 
     /**
@@ -90,6 +95,9 @@ class EltakoFWWKW71L extends IPSModule
      */
     private const KELVIN_WARM = 2700;
     private const KELVIN_COLD = 6500;
+    /** Colour-temperature detent: the slider snaps to this Kelvin within ±tolerance. */
+    private const KELVIN_SNAP = 4600;
+    private const KELVIN_SNAP_TOLERANCE = 100;
 
     public function Create()
     {
@@ -106,8 +114,9 @@ class EltakoFWWKW71L extends IPSModule
         $this->RegisterAttributeBoolean('DetectActive', false);
         // Active Melde-ID detection phase: '' (idle), 'WW' or 'KW'.
         $this->RegisterAttributeString('DetectPhase', '');
-        // Last format auto-detected from incoming telegrams (for display).
-        $this->RegisterAttributeString('DetectedFormat', '');
+        // Latched once the hi-res Master telegram (Haupt+4) is seen → ignore the
+        // redundant percent telegrams from then on (reset on ApplyChanges).
+        $this->RegisterAttributeBoolean('MasterSeen', false);
         // Last non-zero brightness per channel, restored when switching on.
         $this->RegisterAttributeInteger('Last_WW', 100);
         $this->RegisterAttributeInteger('Last_KW', 100);
@@ -159,6 +168,10 @@ class EltakoFWWKW71L extends IPSModule
         parent::ApplyChanges();
 
         $this->ConnectParent(self::GATEWAY_MODULE_GUID);
+
+        // Re-evaluate the feedback format after a (re)configuration: prefer the
+        // hi-res Master again, fall back to percent until a Master is seen.
+        $this->WriteAttributeBoolean('MasterSeen', false);
 
         // Receive filter: promiscuous = everything, otherwise only 4BS (Device=165).
         if ($this->ReadPropertyBoolean('DebugPromiscuous')) {
@@ -400,8 +413,8 @@ class EltakoFWWKW71L extends IPSModule
                 $this->applyCct((int) $Value, $this->kelvinToTemp((int) $this->GetValue('Farbtemperatur')));
                 break;
             case 'Farbtemperatur':
-                // The ~TWColor slider delivers Kelvin.
-                $this->applyCct((int) $this->GetValue('Helligkeit'), $this->kelvinToTemp((int) $Value));
+                // The ~TWColor slider delivers Kelvin; snap to the neutral detent.
+                $this->applyCct((int) $this->GetValue('Helligkeit'), $this->kelvinToTemp($this->snapKelvin((int) $Value)));
                 break;
             case 'Status':
                 if ((bool) $Value) {
@@ -448,8 +461,8 @@ class EltakoFWWKW71L extends IPSModule
             $this->recordDetectCandidate($sender, $data);
         }
 
-        $melde = $this->meldeIdValue();
-        if ($melde === 0) {
+        $haupt = $this->meldeIdValue();
+        if ($haupt === 0) {
             return '';
         }
 
@@ -458,24 +471,32 @@ class EltakoFWWKW71L extends IPSModule
         $db2 = (int) ($data['DataByte2'] ?? 0);
         $db0 = (int) ($data['DataByte0'] ?? 0);
 
-        // Format auto-detection.
-        // High-resolution: single Melde-ID, channel in DataByte1, 10-bit value.
-        // DataByte0 = 0x0E marks a confirmation (a command/echo uses 0x0F).
-        if ($sender === $melde && $db0 === 0x0E && ($db1 === self::DB1_WW || $db1 === self::DB1_KW)) {
+        // Preferred: hi-res Master (Haupt + 4) — both channels report here, the channel
+        // is in DataByte1 (0x10 = WW, 0x11 = KW), the 10-bit value in DataByte3:DataByte2,
+        // DataByte0 = 0x0E marks the confirmation (a command/echo uses 0x0F). Present
+        // whenever the actor sends the "Dimmerwerttelegramm" and 10-bit precise, so once
+        // we see it we latch onto it and ignore the redundant percent telegrams.
+        if ($sender === $haupt + self::MELDE_OFF_MASTER && $db0 === self::DB0_CONFIRM
+            && ($db1 === self::DB1_WW || $db1 === self::DB1_KW)) {
+            if (!$this->ReadAttributeBoolean('MasterSeen')) {
+                $this->WriteAttributeBoolean('MasterSeen', true);
+            }
             $channel = $db1 === self::DB1_WW ? 'WW' : 'KW';
             $level = $this->clamp((int) round((($db3 << 8) | $db2) * 100 / self::VALUE_MAX));
-            $this->setDetectedFormat(self::FORMAT_HIRES);
             $this->applyFeedback($channel, $level, $level > 0);
             return '';
         }
 
-        // Percentage: two Melde-IDs (base = WW, base+1 = KW), value in DataByte2,
-        // on/off in DataByte0 bit0, DataByte3 = 0x02 marks the dim telegram.
-        if (($sender === $melde || $sender === $melde + 1) && $db3 === self::DB3_DIM) {
-            $channel = $sender === $melde ? 'WW' : 'KW';
+        // Fallback: percent per channel (WW = Haupt + 1, KW = Haupt + 2), value in
+        // DataByte2 (0..100 %), on/off in DataByte0 bit 0, DataByte3 = 0x02. Used only
+        // until a Master telegram is seen, so an actor that only sends the percent
+        // "Bestätigungstelegramm" still reports — without a double-update once a Master
+        // arrives.
+        if (!$this->ReadAttributeBoolean('MasterSeen') && $db3 === self::DB3_DIM
+            && ($sender === $haupt + self::MELDE_OFF_WW || $sender === $haupt + self::MELDE_OFF_KW)) {
+            $channel = $sender === $haupt + self::MELDE_OFF_WW ? 'WW' : 'KW';
             $on = ($db0 & 0x01) === 0x01;
             $level = $this->clamp($db2);
-            $this->setDetectedFormat(self::FORMAT_PERCENT);
             $this->applyFeedback($channel, $on ? $level : 0, $on);
             return '';
         }
@@ -507,8 +528,9 @@ class EltakoFWWKW71L extends IPSModule
     // =====================================================================
 
     /**
-     * The single feedback (Melde-) ID; both channels report from it, the channel
-     * is carried in DataByte1. Returns 0 when unset/invalid.
+     * The Haupt-/base Melde-ID (the actor's feedback base). The hi-res Master at
+     * Haupt + 4 carries both channels (channel in DataByte1); the percent telegrams
+     * sit at Haupt + 1 (WW) / Haupt + 2 (KW). Returns 0 when unset/invalid.
      */
     private function meldeIdValue(): int
     {
@@ -525,39 +547,23 @@ class EltakoFWWKW71L extends IPSModule
         return $channel === 'KW' ? self::DB1_KW : self::DB1_WW;
     }
 
-    /** Human-readable label for a telegram format. */
-    private function formatLabel(string $format): string
-    {
-        if ($format === self::FORMAT_HIRES) {
-            return $this->Translate('hochauflösend');
-        }
-        if ($format === self::FORMAT_PERCENT) {
-            return $this->Translate('Prozent');
-        }
-        return $this->Translate('noch nichts empfangen');
-    }
-
-    /** Combined status line for the form (Melde-ID + detected receive format). */
+    /**
+     * Status line for the form: the Haupt-Melde-ID and the addresses derived from it
+     * (Master = +4, WW = +1, KW = +2), so it can be cross-checked against a sniff.
+     */
     private function infoCaption(): string
     {
-        $melde = $this->meldeIdValue();
-        $meldeStr = $melde === 0 ? '—' : sprintf('%08X', $melde);
-        return sprintf(
-            $this->Translate('Melde-ID: %s   ·   empfangenes Format: %s   (Empfang wird automatisch erkannt)'),
-            $meldeStr,
-            $this->formatLabel($this->ReadAttributeString('DetectedFormat'))
-        );
-    }
-
-    /** Remember the auto-detected receive format and reflect it in the form. */
-    private function setDetectedFormat(string $format): void
-    {
-        if ($this->ReadAttributeString('DetectedFormat') === $format) {
-            return;
+        $haupt = $this->meldeIdValue();
+        if ($haupt === 0) {
+            return $this->Translate('Melde-ID (Haupt): —');
         }
-        $this->WriteAttributeString('DetectedFormat', $format);
-        $this->UpdateFormField('InfoLabel', 'caption', $this->infoCaption());
-        $this->SendDebug('Format', 'detected ' . $format, 0);
+        return sprintf(
+            $this->Translate('Melde-ID (Haupt): %08X   ·   Master: %08X   ·   WW: %08X   ·   KW: %08X'),
+            $haupt,
+            $haupt + self::MELDE_OFF_MASTER,
+            $haupt + self::MELDE_OFF_WW,
+            $haupt + self::MELDE_OFF_KW
+        );
     }
 
     /**
@@ -565,8 +571,8 @@ class EltakoFWWKW71L extends IPSModule
      * the current phase's buffer (DetectWW or DetectKW). Excludes our own send echo
      * (BaseID + offset) and accepts both confirmation formats: hi-res (channel byte
      * + DataByte0 = 0x0E) or percent (DataByte3 = 0x02 + DataByte0 = 0x09/0x08).
-     * The hi-res Master telegram (DataByte1 = 0x09) matches neither and is dropped.
-     * finishDetect() then maps the per-channel addresses to the WW base.
+     * finishDetect() then derives the Haupt base from the answering addresses
+     * (Master = sender − 4, WW = sender − 1, KW = sender − 2).
      */
     private function recordDetectCandidate(int $sender, array $data): void
     {
@@ -579,7 +585,7 @@ class EltakoFWWKW71L extends IPSModule
         $db1 = (int) ($data['DataByte1'] ?? -1);
         $db0 = (int) ($data['DataByte0'] ?? -1);
         $db3 = (int) ($data['DataByte3'] ?? -1);
-        $isHires = ($db1 === self::DB1_WW || $db1 === self::DB1_KW) && $db0 === 0x0E;
+        $isHires = ($db1 === self::DB1_WW || $db1 === self::DB1_KW) && $db0 === self::DB0_CONFIRM;
         $isPercent = $db3 === self::DB3_DIM && ($db0 === self::DB0_ON || $db0 === self::DB0_OFF);
         if (!$isHires && !$isPercent) {
             return;
@@ -612,13 +618,13 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Evaluate the two probe windows and write the WW Melde-ID.
+     * Evaluate the two probe windows and write the Haupt-Melde-ID (the feedback base).
      *
-     * Hi-res confirmations carry the channel in DataByte1 → a single Melde-ID, taken
-     * directly. Percent confirmations encode the channel only in the address: the WW
-     * probe answers from the WW base, the KW probe from the KW base (= WW base + 1).
-     * Because each address is tied to the channel we drove, there is no "lowest ID"
-     * guesswork and no off-by-one — if only KW answered, the WW base is KW − 1.
+     * During each probe the actor answers from the hi-res Master (Haupt + 4, channel
+     * in DataByte1) and — if "% senden" is on — from the percent channel address
+     * (WW = Haupt + 1, KW = Haupt + 2). The Master is preferred (always present, both
+     * channels); the base is the answering address minus its known offset, so there
+     * is no "lowest ID" guesswork and no off-by-one.
      */
     private function finishDetect(): void
     {
@@ -627,51 +633,47 @@ class EltakoFWWKW71L extends IPSModule
         $ww = is_array($ww) ? $ww : [];
         $kw = is_array($kw) ? $kw : [];
 
-        $hires = [];
+        $master = [];
         $wwPercent = [];
         $kwPercent = [];
         foreach ($ww as $c) {
             if (!empty($c['h'])) {
-                $hires[] = (int) $c['s'];
+                $master[] = (int) $c['s'];
             } else {
                 $wwPercent[] = (int) $c['s'];
             }
         }
         foreach ($kw as $c) {
             if (!empty($c['h'])) {
-                $hires[] = (int) $c['s'];
+                $master[] = (int) $c['s'];
             } else {
                 $kwPercent[] = (int) $c['s'];
             }
         }
 
-        $pick = null;
-        $format = '';
-        if (count($hires) > 0) {
-            sort($hires);
-            $pick = $hires[0];          // single Melde-ID, channel is in DataByte1
-            $format = self::FORMAT_HIRES;
+        $haupt = null;
+        if (count($master) > 0) {
+            sort($master);
+            $haupt = $master[0] - self::MELDE_OFF_MASTER;
         } elseif (count($wwPercent) > 0) {
             sort($wwPercent);
-            $pick = $wwPercent[0];      // WW base directly
-            $format = self::FORMAT_PERCENT;
+            $haupt = $wwPercent[0] - self::MELDE_OFF_WW;
         } elseif (count($kwPercent) > 0) {
             sort($kwPercent);
-            $pick = $kwPercent[0] - 1;  // derive WW base from KW (KW = WW + 1)
-            $format = self::FORMAT_PERCENT;
+            $haupt = $kwPercent[0] - self::MELDE_OFF_KW;
         }
 
-        if ($pick === null) {
-            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Keine Rückmeldung erkannt. Aktor eingelernt und Bestätigung aktiv (PCT14)? Sonst Melde-ID manuell eintragen.'));
+        if ($haupt === null || $haupt <= 0) {
+            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Keine Rückmeldung erkannt. Aktor eingelernt und Dimmerwerttelegramm aktiv (PCT14)? Sonst Melde-ID manuell eintragen.'));
             $this->SendDebug('DetectMelde', 'no candidates', 0);
             return;
         }
 
-        $hex = strtoupper(str_pad(dechex($pick), 8, '0', STR_PAD_LEFT));
-        $this->WriteAttributeString('DetectedFormat', $format);
+        $hex = strtoupper(str_pad(dechex($haupt), 8, '0', STR_PAD_LEFT));
+        $masterHex = strtoupper(str_pad(dechex($haupt + self::MELDE_OFF_MASTER), 8, '0', STR_PAD_LEFT));
         $this->UpdateFormField('MeldeID', 'value', $hex);
-        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s (%s) — bitte speichern.'), $hex, $this->formatLabel($format)));
-        $this->SendDebug('DetectMelde', 'picked ' . $hex . ' format ' . $format, 0);
+        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt – Haupt-Melde-ID %s (Master %s). Bitte speichern.'), $hex, $masterHex));
+        $this->SendDebug('DetectMelde', 'picked Haupt ' . $hex, 0);
     }
 
     /** Remember a channel's last non-zero brightness (for the Status-on restore). */
@@ -892,6 +894,18 @@ class EltakoFWWKW71L extends IPSModule
     private function kelvinToTemp(int $kelvin): int
     {
         return $this->clamp((int) round(($kelvin - self::KELVIN_WARM) * 100 / (self::KELVIN_COLD - self::KELVIN_WARM)));
+    }
+
+    /**
+     * Snap a Kelvin value to the neutral detent (KELVIN_SNAP) when within tolerance,
+     * so the colour-temperature slider "catches" at the neutral white midpoint.
+     */
+    private function snapKelvin(int $kelvin): int
+    {
+        if (abs($kelvin - self::KELVIN_SNAP) <= self::KELVIN_SNAP_TOLERANCE) {
+            return self::KELVIN_SNAP;
+        }
+        return $kelvin;
     }
 
     /**

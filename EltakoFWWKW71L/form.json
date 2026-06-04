@@ -42,7 +42,7 @@
         },
         {
             "type": "Label",
-            "caption": "Tipp: „Automatisch erkennen\" klicken und den Aktor innerhalb 20 s am Taster EIN/AUS schalten – die Melde-ID wird übernommen."
+            "caption": "Tipp: „Automatisch erkennen\" klicken – das Modul steuert Warmweiß und Kaltweiß kurz nacheinander an und übernimmt die Melde-ID automatisch (Aktor muss eingelernt sein und Bestätigungen senden)."
         },
         {
             "type": "Label",

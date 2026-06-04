@@ -93,11 +93,12 @@ Senden ist immer hochauflösend, das Empfangsformat wird automatisch erkannt:
    (GFVS hochauflösend) bzw. **10** (GFVS mit Bestätigung) und den **mittleren
    auf LRN** stellen, dann *Einlernen* klicken. Danach mittleren zurück auf die
    gewünschte Mindesthelligkeit (`%`).
-3. **Melde-ID** ermitteln: *Automatisch erkennen* klicken und **innerhalb von
-   20 s den Aktor am Taster EIN und AUS schalten**. Das Modul liest die
-   Kanal-Rückmeldung mit und trägt die WW-Adresse ein. (Alternativ *Suchen*,
-   Aktor schalten, niedrigste Adresse übernehmen – oder die Melde-ID direkt
-   eintragen.) Danach **speichern**.
+3. **Melde-ID** ermitteln: *Automatisch erkennen* klicken. Das Modul steuert
+   **Warmweiß und Kaltweiß kurz nacheinander an** und übernimmt je Kanal die
+   Adresse, von der der Aktor bestätigt – die WW-Adresse landet im Feld. Der
+   Aktor muss dafür eingelernt sein und Bestätigungen senden. (Alternativ
+   *Suchen*, Aktor schalten, niedrigste Adresse übernehmen – oder die Melde-ID
+   direkt eintragen.) Danach **speichern**.
 4. Fertig. Das Formular zeigt das **erkannte Empfangsformat** (hochauflösend
    oder Prozent). Steuern/Status laufen, auch bei Taster-Bedienung des Aktors.
 
@@ -146,8 +147,9 @@ der Kachel-Visualisierung der Instanz die Darstellung **„Licht"** zuweisen →
 Status + Helligkeit + Farbtemperatur erscheinen in **einer** Kachel.
 
 Komfort:
-- **Rückmeldeadresse automatisch erkennen**: stößt den Aktor an und übernimmt
-  die ID, von der er bestätigt (`DataByte0 = 0x0E`), automatisch ins Melde-ID-Feld.
+- **Rückmeldeadresse automatisch erkennen**: steuert WW und KW kurz nacheinander
+  an und übernimmt je Kanal die Adresse, von der der Aktor bestätigt – im
+  Prozent-Modus eindeutig der WW-Basis zugeordnet (kein Raten der niedrigsten ID).
 
 Geplante Layer (bewusst **nicht** in diesem Modul): CCT-Komfort, Lichtszenen,
 Schlummer/Lichtwecker, Astro, Bidi-Watchdog. Die API hält dafür typisierte,

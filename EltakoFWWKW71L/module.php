@@ -79,10 +79,10 @@ class EltakoFWWKW71L extends IPSModule
     /** DataByte1 = 0x02 requests a confirmation telegram without changing state. */
     private const DB1_STATUS_REQUEST = 0x02;
 
-    /** Auto-assigned "Wähle freie Geräte-ID" starts here (existing Eltako 1-47). */
-    private const SENDER_OFFSET_BASE = 100;
     /** Discovery collection window in seconds. */
     private const DISCOVERY_WINDOW = 30;
+    /** Melde-ID detection: per-channel probe window in milliseconds (WW then KW). */
+    private const DETECT_PHASE_MS = 5000;
 
     /**
      * Colour-temperature endpoints (Kelvin) for the standard ~TWColor slider used
@@ -104,6 +104,8 @@ class EltakoFWWKW71L extends IPSModule
         // --- Runtime state ---
         $this->RegisterAttributeBoolean('DiscoveryActive', false);
         $this->RegisterAttributeBoolean('DetectActive', false);
+        // Active Melde-ID detection phase: '' (idle), 'WW' or 'KW'.
+        $this->RegisterAttributeString('DetectPhase', '');
         // Last format auto-detected from incoming telegrams (for display).
         $this->RegisterAttributeString('DetectedFormat', '');
         // Last non-zero brightness per channel, restored when switching on.
@@ -236,26 +238,40 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Pick the smallest free Geräte-ID (base + base+1 unused by other instances
-     * of this module) and write it into the form field.
+     * Pick the lowest free Geräte-ID (sender offset) across *all* EnOcean device
+     * instances on the same gateway — not just this module — mirroring the native
+     * Symcon / MoreEnoceanFeatures "nächste freie Sende-ID" search.
+     *
+     * Every EnOcean sending device (native, MEF and this module) stores its sender
+     * offset in the integer property "DeviceID", so we collect those from all
+     * device instances (type 3) sharing our gateway (same ConnectionID) and return
+     * the lowest unused offset in 1..127 (the EnOcean BaseID's 128-address range,
+     * offset 0 = BaseID itself).
      */
     public function PickFreeDeviceID(): void
     {
-        // Sending always uses a single offset (channel is in DataByte1), so one
-        // offset per instance is enough.
+        $gateway = (int) IPS_GetInstance($this->InstanceID)['ConnectionID'];
+
         $used = [];
-        foreach (IPS_GetInstanceListByModuleID(self::moduleId()) as $iid) {
-            if ($iid === $this->InstanceID) {
-                continue;
-            }
-            $d = (int) IPS_GetProperty($iid, 'DeviceID');
-            if ($d > 0) {
-                $used[$d] = true;
+        if ($gateway > 0) {
+            foreach (IPS_GetInstanceList() as $iid) {
+                if ((int) IPS_GetInstance($iid)['ConnectionID'] !== $gateway) {
+                    continue; // not a device on our gateway
+                }
+                $config = json_decode(IPS_GetConfiguration($iid), true);
+                if (is_array($config) && isset($config['DeviceID']) && is_int($config['DeviceID']) && $config['DeviceID'] > 0) {
+                    $used[$config['DeviceID']] = true;
+                }
             }
         }
-        $n = self::SENDER_OFFSET_BASE;
-        while (isset($used[$n])) {
+
+        $n = 1;
+        while ($n <= 127 && isset($used[$n])) {
             $n++;
+        }
+        if ($n > 127) {
+            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Keine freie Geräte-ID (1–127) am Gateway verfügbar.'));
+            return;
         }
         $this->UpdateFormField('DeviceID', 'value', $n);
     }
@@ -306,15 +322,17 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * Auto-detect the Melde-ID by listening to the actor's channel confirmations.
+     * Auto-detect the Melde-ID by actively driving each channel and recording the
+     * address the actor confirms from — no manual button toggling needed.
      *
-     * A status request only triggers the actor's Master telegram (Base ID+4),
-     * which a percent actor sends in hi-res form (e.g. FFF00984) and which cannot
-     * be mapped back to the channel address reliably. The real per-channel
-     * confirmations (warmweiß = Base ID+1, kaltweiß = +2) are only emitted on a
-     * state change, so the user switches the actor while detection is armed.
-     * StopDetectMelde() then prefers the lowest percent address (= warmweiß) and
-     * falls back to hi-res (single Melde-ID actor).
+     * The module drives WW (a 0→100 toggle, guaranteeing a state change), waits a
+     * short window, then drives KW. Because *we* triggered each channel, the
+     * address that answers is unambiguously that channel's confirmation address —
+     * even in percent mode, where the channel is encoded only in the address
+     * (warmweiß = Base ID+1, kaltweiß = Base ID+2). The actor's hi-res Master
+     * telegram (Base ID+4, DataByte1 = 0x09) matches no channel confirmation and
+     * is ignored. StopDetectMelde() runs the two-phase state machine; finishDetect()
+     * maps the captured addresses to the WW base.
      */
     public function DetectMelde(): void
     {
@@ -322,19 +340,24 @@ class EltakoFWWKW71L extends IPSModule
             $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Bitte zuerst die Geräte-ID setzen.'));
             return;
         }
-        $this->SetBuffer('DetectCandidates', json_encode([]));
+        if (!$this->HasActiveParent()) {
+            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Gateway nicht verbunden – bitte zuerst verbinden.'));
+            return;
+        }
+        $this->SetBuffer('DetectWW', json_encode([]));
+        $this->SetBuffer('DetectKW', json_encode([]));
         $this->WriteAttributeBoolean('DetectActive', true);
-        $this->SetTimerInterval('DetectStop', 20000);
-        $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Erkennung läuft – schalte den Aktor jetzt am Taster EIN und AUS (20 s) …'));
-        $this->SendDebug('DetectMelde', 'started', 0);
-        $this->sendStatusRequest();
+        $this->WriteAttributeString('DetectPhase', 'WW');
+        $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Erkennung läuft – Warmweiß wird angesteuert …'));
+        $this->SendDebug('DetectMelde', 'phase WW: probing', 0);
+        $this->probeChannel('WW');
+        $this->SetTimerInterval('DetectStop', self::DETECT_PHASE_MS);
     }
 
     /**
-     * Finish Melde-ID detection (called by the timer): pick the warm-white
-     * channel address. Percent channel confirmations (Base ID+1 = warmweiß,
-     * +2 = kaltweiß) are preferred over a hi-res Master telegram, so the lowest
-     * percent address wins; a pure hi-res actor uses its single confirm address.
+     * Two-phase detection state machine (driven by the DetectStop timer): after the
+     * WW probe window drive KW, after the KW window evaluate and write the Melde-ID
+     * via finishDetect(). A stray call while idle just clears the timer.
      */
     public function StopDetectMelde(): void
     {
@@ -342,39 +365,20 @@ class EltakoFWWKW71L extends IPSModule
             $this->SetTimerInterval('DetectStop', 0);
             return;
         }
-        $this->WriteAttributeBoolean('DetectActive', false);
-        $this->SetTimerInterval('DetectStop', 0);
 
-        $list = json_decode($this->GetBuffer('DetectCandidates'), true);
-        if (!is_array($list) || count($list) === 0) {
-            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Keine Rückmeldung erkannt. Aktor am Taster EIN/AUS schalten und erneut versuchen, oder Melde-ID manuell eintragen.'));
+        if ($this->ReadAttributeString('DetectPhase') === 'WW') {
+            $this->WriteAttributeString('DetectPhase', 'KW');
+            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Erkennung läuft – Kaltweiß wird angesteuert …'));
+            $this->SendDebug('DetectMelde', 'phase KW: probing', 0);
+            $this->probeChannel('KW');
+            $this->SetTimerInterval('DetectStop', self::DETECT_PHASE_MS);
             return;
         }
 
-        $hires = [];
-        $percent = [];
-        foreach ($list as $c) {
-            if (!empty($c['h'])) {
-                $hires[] = (int) $c['s'];
-            } else {
-                $percent[] = (int) $c['s'];
-            }
-        }
-
-        // Prefer the per-channel percent confirmation (warmweiß = lowest = Base ID+1)
-        // over a hi-res Master telegram, which a percent actor also emits.
-        if (count($percent) > 0) {
-            sort($percent);
-            $pick = $percent[0];
-        } else {
-            sort($hires);
-            $pick = $hires[0];
-        }
-
-        $hex = strtoupper(str_pad(dechex($pick), 8, '0', STR_PAD_LEFT));
-        $this->UpdateFormField('MeldeID', 'value', $hex);
-        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s — bitte speichern.'), $hex));
-        $this->SendDebug('DetectMelde', 'picked ' . $hex . ' from ' . count($list) . ' candidate(s)', 0);
+        $this->WriteAttributeBoolean('DetectActive', false);
+        $this->WriteAttributeString('DetectPhase', '');
+        $this->SetTimerInterval('DetectStop', 0);
+        $this->finishDetect();
     }
 
     // =====================================================================
@@ -557,11 +561,12 @@ class EltakoFWWKW71L extends IPSModule
     }
 
     /**
-     * During Melde-ID detection, collect every address the actor confirms from.
-     * Excludes our own send echo (BaseID + offset) and accepts both confirmation
-     * formats: hi-res (channel byte + DataByte0 = 0x0E) or percent (DataByte3 =
-     * 0x02 + DataByte0 = 0x09/0x08). StopDetectMelde() then picks the lowest
-     * address (= warm-white channel, Base ID+1).
+     * During Melde-ID detection, record the address the actor confirms from into
+     * the current phase's buffer (DetectWW or DetectKW). Excludes our own send echo
+     * (BaseID + offset) and accepts both confirmation formats: hi-res (channel byte
+     * + DataByte0 = 0x0E) or percent (DataByte3 = 0x02 + DataByte0 = 0x09/0x08).
+     * The hi-res Master telegram (DataByte1 = 0x09) matches neither and is dropped.
+     * finishDetect() then maps the per-channel addresses to the WW base.
      */
     private function recordDetectCandidate(int $sender, array $data): void
     {
@@ -580,18 +585,93 @@ class EltakoFWWKW71L extends IPSModule
             return;
         }
 
-        $list = json_decode($this->GetBuffer('DetectCandidates'), true);
+        $key = $this->ReadAttributeString('DetectPhase') === 'KW' ? 'DetectKW' : 'DetectWW';
+        $list = json_decode($this->GetBuffer($key), true);
         if (!is_array($list)) {
             $list = [];
         }
         foreach ($list as $c) {
             if ((int) $c['s'] === $sender) {
-                return; // already recorded
+                return; // already recorded this phase
             }
         }
         $list[] = ['s' => $sender, 'h' => $isHires];
-        $this->SetBuffer('DetectCandidates', json_encode($list));
-        $this->SendDebug('DetectMelde', 'candidate ' . strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT)) . ($isHires ? ' (hires)' : ' (percent)'), 0);
+        $this->SetBuffer($key, json_encode($list));
+        $this->SendDebug('DetectMelde', $key . ' candidate ' . strtoupper(str_pad(dechex($sender), 8, '0', STR_PAD_LEFT)) . ($isHires ? ' (hires)' : ' (percent)'), 0);
+    }
+
+    /**
+     * Drive one channel with a 0→100 toggle so the actor emits its confirmation for
+     * that channel regardless of the prior level. Side-effect-free (no variable or
+     * Last_* updates) — purely a stimulus for Melde-ID detection.
+     */
+    private function probeChannel(string $channel): void
+    {
+        $this->txChannel($channel, 0);
+        $this->txChannel($channel, 100);
+    }
+
+    /**
+     * Evaluate the two probe windows and write the WW Melde-ID.
+     *
+     * Hi-res confirmations carry the channel in DataByte1 → a single Melde-ID, taken
+     * directly. Percent confirmations encode the channel only in the address: the WW
+     * probe answers from the WW base, the KW probe from the KW base (= WW base + 1).
+     * Because each address is tied to the channel we drove, there is no "lowest ID"
+     * guesswork and no off-by-one — if only KW answered, the WW base is KW − 1.
+     */
+    private function finishDetect(): void
+    {
+        $ww = json_decode($this->GetBuffer('DetectWW'), true);
+        $kw = json_decode($this->GetBuffer('DetectKW'), true);
+        $ww = is_array($ww) ? $ww : [];
+        $kw = is_array($kw) ? $kw : [];
+
+        $hires = [];
+        $wwPercent = [];
+        $kwPercent = [];
+        foreach ($ww as $c) {
+            if (!empty($c['h'])) {
+                $hires[] = (int) $c['s'];
+            } else {
+                $wwPercent[] = (int) $c['s'];
+            }
+        }
+        foreach ($kw as $c) {
+            if (!empty($c['h'])) {
+                $hires[] = (int) $c['s'];
+            } else {
+                $kwPercent[] = (int) $c['s'];
+            }
+        }
+
+        $pick = null;
+        $format = '';
+        if (count($hires) > 0) {
+            sort($hires);
+            $pick = $hires[0];          // single Melde-ID, channel is in DataByte1
+            $format = self::FORMAT_HIRES;
+        } elseif (count($wwPercent) > 0) {
+            sort($wwPercent);
+            $pick = $wwPercent[0];      // WW base directly
+            $format = self::FORMAT_PERCENT;
+        } elseif (count($kwPercent) > 0) {
+            sort($kwPercent);
+            $pick = $kwPercent[0] - 1;  // derive WW base from KW (KW = WW + 1)
+            $format = self::FORMAT_PERCENT;
+        }
+
+        if ($pick === null) {
+            $this->UpdateFormField('InfoLabel', 'caption', $this->Translate('Keine Rückmeldung erkannt. Aktor eingelernt und Bestätigung aktiv (PCT14)? Sonst Melde-ID manuell eintragen.'));
+            $this->SendDebug('DetectMelde', 'no candidates', 0);
+            return;
+        }
+
+        $hex = strtoupper(str_pad(dechex($pick), 8, '0', STR_PAD_LEFT));
+        $this->WriteAttributeString('DetectedFormat', $format);
+        $this->UpdateFormField('MeldeID', 'value', $hex);
+        $this->UpdateFormField('InfoLabel', 'caption', sprintf($this->Translate('Erkannt: %s (%s) — bitte speichern.'), $hex, $this->formatLabel($format)));
+        $this->SendDebug('DetectMelde', 'picked ' . $hex . ' format ' . $format, 0);
     }
 
     /** Remember a channel's last non-zero brightness (for the Status-on restore). */
@@ -614,19 +694,12 @@ class EltakoFWWKW71L extends IPSModule
     private function setChannel(string $channel, int $value): void
     {
         $value = $this->clamp($value);
-        $offset = $this->ReadPropertyInteger('DeviceID');
-        if ($offset <= 0) {
+        if ($this->ReadPropertyInteger('DeviceID') <= 0) {
             $this->SendDebug('TX ' . $channel, 'no Geräte-ID set, ignored', 0);
             return;
         }
         $this->rememberLast($channel, $value);
-
-        $raw = (int) round($value * self::VALUE_MAX / 100);
-        $db3 = ($raw >> 8) & 0xFF;   // high 2 bits
-        $db2 = $raw & 0xFF;          // low byte
-        $db1 = $this->channelByte($channel);
-        $this->SendDebug('TX ' . $channel, sprintf('offset=%d pct=%d raw=%d', $offset, $value, $raw), 0);
-        $this->sendTelegram($offset, $db3, $db2, $db1, self::DB0_CMD);
+        $this->txChannel($channel, $value);
 
         // Status emulation: reflect the command immediately when bidi feedback
         // is not trusted/available; otherwise the variable follows the actor.
@@ -634,6 +707,25 @@ class EltakoFWWKW71L extends IPSModule
             $this->SetValue($channel, $value);
             $this->recomputeStatus();
         }
+    }
+
+    /**
+     * Encode and send a hi-res dim command for one channel — the wire-level part of
+     * setChannel(), shared with the detection probe. No variable/Last_* side effects.
+     */
+    private function txChannel(string $channel, int $value): void
+    {
+        $value = $this->clamp($value);
+        $offset = $this->ReadPropertyInteger('DeviceID');
+        if ($offset <= 0) {
+            return;
+        }
+        $raw = (int) round($value * self::VALUE_MAX / 100);
+        $db3 = ($raw >> 8) & 0xFF;   // high 2 bits
+        $db2 = $raw & 0xFF;          // low byte
+        $db1 = $this->channelByte($channel);
+        $this->SendDebug('TX ' . $channel, sprintf('offset=%d pct=%d raw=%d', $offset, $value, $raw), 0);
+        $this->sendTelegram($offset, $db3, $db2, $db1, self::DB0_CMD);
     }
 
     /**
@@ -834,10 +926,5 @@ class EltakoFWWKW71L extends IPSModule
     private function clamp(int $value, int $min = 0, int $max = 100): int
     {
         return max($min, min($max, $value));
-    }
-
-    private static function moduleId(): string
-    {
-        return '{BA799264-A70F-4CBF-BB9A-89E6492A22E9}';
     }
 }

@@ -50,6 +50,16 @@
             "caption": "{{INFO}}"
         },
         {
+            "type": "CheckBox",
+            "name": "RememberLastState",
+            "caption": "Letzten Zustand merken (beim Einschalten wiederherstellen; aus = beim Einschalten Neutralweiß 100 %)"
+        },
+        {
+            "type": "CheckBox",
+            "name": "RestoreOnLocalSwitch",
+            "caption": "Auch am Wandtaster: beim lokalen Einschalten letzten Zustand wiederherstellen (kann kurz aufblitzen, überstimmt lokales Voll-Einschalten)"
+        },
+        {
             "type": "ExpansionPanel",
             "caption": "Erweitert",
             "items": [
@@ -85,13 +95,13 @@
                 },
                 {
                     "type": "Button",
-                    "caption": "100 %",
+                    "caption": "Neutralweiß 100 %",
                     "onClick": "EFW_AllOn($id);"
                 },
                 {
                     "type": "Button",
-                    "caption": "50 %",
-                    "onClick": "EFW_SetBoth($id, 50, 50);"
+                    "caption": "Letzter Zustand",
+                    "onClick": "EFW_RestoreLast($id);"
                 },
                 {
                     "type": "Button",
@@ -99,46 +109,6 @@
                     "onClick": "EFW_SwitchOff($id);"
                 }
             ]
-        },
-        {
-            "type": "Label",
-            "caption": "Melde-ID manuell finden: Suchen starten und den Aktor schalten – die Melde-ID erscheint mit hohem Zähler, dann übernehmen."
-        },
-        {
-            "type": "Button",
-            "caption": "Suchen (30 s)",
-            "onClick": "EFW_StartDiscovery($id);"
-        },
-        {
-            "type": "List",
-            "name": "DiscoveryList",
-            "caption": "Gefundene 4BS-IDs",
-            "rowCount": 6,
-            "add": false,
-            "delete": false,
-            "columns": [
-                {
-                    "caption": "Sender-ID (hex)",
-                    "name": "SenderIDHex",
-                    "width": "180px"
-                },
-                {
-                    "caption": "DB2",
-                    "name": "DB2",
-                    "width": "80px"
-                },
-                {
-                    "caption": "Anzahl",
-                    "name": "Count",
-                    "width": "80px"
-                }
-            ],
-            "values": []
-        },
-        {
-            "type": "Button",
-            "caption": "Ausgewählte → Melde-ID",
-            "onClick": "EFW_AdoptDiscovered($id, $DiscoveryList['SenderIDHex']);"
         }
     ],
     "status": []
